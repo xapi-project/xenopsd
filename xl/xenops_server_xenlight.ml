@@ -343,11 +343,11 @@ module Mem = struct
 				raise (Cannot_free_this_much_memory(needed, free))
 			| Memory_interface.Domains_refused_to_cooperate domids ->
 				debug "Got error_domains_refused_to_cooperate_code from ballooning daemon";
-				Xenctrl.with_intf
-					(fun xc ->
-						let vms = List.map (get_uuid ~xc) domids |> List.map Uuidm.to_string in
-						raise (Vms_failed_to_cooperate(vms))
-					)
+				with_ctx (fun ctx ->
+					let open Xenlight.Dominfo in
+					let get_uuid domid = (get ctx domid).uuid in
+					let vms = List.map get_uuid domids in
+					raise (Vms_failed_to_cooperate(vms)))
 			| Unix.Unix_error(Unix.ECONNREFUSED, "connect", _) ->
 				info "ECONNREFUSED talking to squeezed: assuming it has been switched off";
 				None
@@ -446,6 +446,7 @@ module Mem = struct
 						(* This happens when someone manually runs 'service squeezed stop' *)
 						Mutex.execute cached_session_id_m (fun () -> cached_session_id := None);
 						error "Ballooning daemon has disappeared. Manually setting domain maxmem for domid = %d to %Ld KiB" domid amount;
+						(* TODO: replace domain_setmaxmem with libxl_domain_setmaxmem (not yet written!) *)
 						Xenctrl.with_intf (fun xc -> Xenctrl.domain_setmaxmem xc domid amount);
 				end
  			| None ->
@@ -1470,7 +1471,8 @@ module VM = struct
 		let hvm = match vm.ty with HVM _ -> true | _ -> false in
 		(* XXX add per-vcpu information to the platform data *)
 		(* VCPU configuration *)
-		let pcpus = Xenctrlext.get_max_nr_cpus xc in							
+		(* TODO replace get_max_nr_cpus with libxl_get_max_cpu (not yet in Xenlight!) *)
+		let pcpus = Xenctrlext.get_max_nr_cpus xc in
 		let all_pcpus = pcpus |> Range.make 0 |> Range.to_list in
 		let all_vcpus = vm.vcpu_max |> Range.make 0 |> Range.to_list in
 		let masks = match vm.scheduler_params.affinity with
@@ -1681,11 +1683,12 @@ module VM = struct
 		let domid = di.domid in
 		let static_max_mib = Memory.mib_of_bytes_used vm.Vm.memory_static_max in
 		let newshadow = Int64.to_int (Memory.HVM.shadow_mib static_max_mib vm.Vm.vcpu_max target) in
+		(* NB: Xenctrl.shadow_allocation_{get,set} do not yet have a libxl replacement *)
 		let curshadow = Xenctrl.shadow_allocation_get xc domid in
 		let needed_mib = newshadow - curshadow in
 		debug "VM = %s; domid = %d; Domain has %d MiB shadow; an increase of %d MiB requested" vm.Vm.id domid curshadow needed_mib;
 		if not(Domain.wait_xen_free_mem xc (Int64.mul (Int64.of_int needed_mib) 1024L)) then begin
-		    error "VM = %s; domid = %d; Failed waiting for Xen to free %d MiB: some memory is not properly accounted" vm.Vm.id domid needed_mib;
+			error "VM = %s; domid = %d; Failed waiting for Xen to free %d MiB: some memory is not properly accounted" vm.Vm.id domid needed_mib;
 			raise (Not_enough_memory (Memory.bytes_of_mib (Int64.of_int needed_mib)))
 		end;
 		debug "VM = %s; domid = %d; shadow_allocation_setto %d MiB" vm.Vm.id domid newshadow;
