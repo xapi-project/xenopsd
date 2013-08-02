@@ -1471,8 +1471,9 @@ module VM = struct
 		let hvm = match vm.ty with HVM _ -> true | _ -> false in
 		(* XXX add per-vcpu information to the platform data *)
 		(* VCPU configuration *)
-		(* TODO replace get_max_nr_cpus with libxl_get_max_cpu (not yet in Xenlight!) *)
-		let pcpus = Xenctrlext.get_max_nr_cpus xc in
+		let pcpus = with_ctx (fun ctx ->
+			Xenlight.Physinfo.((get ctx).nr_cpus)) |> Int32.to_int in
+		(* let pcpus = Xenctrlext.get_max_nr_cpus xc in *)
 		let all_pcpus = pcpus |> Range.make 0 |> Range.to_list in
 		let all_vcpus = vm.vcpu_max |> Range.make 0 |> Range.to_list in
 		let masks = match vm.scheduler_params.affinity with
@@ -2655,7 +2656,8 @@ module DEBUG = struct
 					match di_of_uuid ~xs Newest uuid with
 						| None -> raise (Does_not_exist("domain", k))
 						| Some di ->
-							Xenctrl.domain_shutdown xc di.domid Xenctrl.Reboot
+							with_ctx (fun ctx -> Xenlight.Domain.reboot ctx di.domid)
+							(* Xenctrl.domain_shutdown xc di.domid Xenctrl.Reboot *)
 				)
 		| "halt", [ k ] ->
 			let uuid = uuid_of_string k in
@@ -2664,7 +2666,8 @@ module DEBUG = struct
 					match di_of_uuid ~xs Newest uuid with
 						| None -> raise (Does_not_exist("domain", k))
 						| Some di ->
-							Xenctrl.domain_shutdown xc di.domid Xenctrl.Halt
+							with_ctx (fun ctx -> Xenlight.Domain.shutdown ctx di.domid)
+							(* Xenctrl.domain_shutdown xc di.domid Xenctrl.Halt *)
 				)
 		| _ ->
 			debug "DEBUG.trigger cmd=%s Unimplemented" cmd;
