@@ -295,7 +295,7 @@ module Storage = struct
 	let epoch_end = epoch_end
 
 	(* We need to deal with driver domains here: *)
-	let attach_and_activate ~xc ~xs task vm dp sr vdi read_write =
+	let attach_and_activate ~xs task vm dp sr vdi read_write =
 		let result = attach_and_activate task vm dp sr vdi read_write in
 		let backend = Xenops_task.with_subtask task (Printf.sprintf "Policy.get_backend_vm %s %s %s" vm sr vdi)
 			(transform_exception (fun () -> Client.Policy.get_backend_vm "attach_and_activate" vm sr vdi)) in
@@ -321,7 +321,7 @@ let with_disk ~xc ~xs task disk write f = match disk with
 			(fun () ->
 				let frontend_domid = this_domid ~xs in
 				let frontend_vm = get_uuid ~xc frontend_domid |> Uuidm.to_string in
-				let vdi = attach_and_activate ~xc ~xs task frontend_vm dp sr vdi write in
+				let vdi = attach_and_activate ~xs task frontend_vm dp sr vdi write in
 				let device = create_vbd_frontend ~xc ~xs task frontend_domid vdi in
 				finally
 					(fun () ->
@@ -647,7 +647,7 @@ module VBD = struct
 
 	let id_of vbd = snd vbd.id
 
-	let attach_and_activate task xc xs vm vbd = function
+	let attach_and_activate task xs vm vbd = function
 		| None ->
 			(* XXX: do something better with CDROMs *)
 			{ domid = this_domid ~xs; attach_info = { Storage_interface.params=""; xenstore_data=[]; } }
@@ -657,7 +657,7 @@ module VBD = struct
 			let sr, vdi = Storage.get_disk_by_name task path in
 			let dp = Storage.id_of vm vbd.id in
 			let vm = fst vbd.id in
-			Storage.attach_and_activate ~xc ~xs task vm dp sr vdi (vbd.mode = ReadWrite)
+			Storage.attach_and_activate ~xs task vm dp sr vdi (vbd.mode = ReadWrite)
 
 	let frontend_domid_of_device device = device.Device_common.frontend.Device_common.domid
 
@@ -739,7 +739,7 @@ module VBD = struct
 
 	let pre_plug task vm hvm vbd =
 		debug "VBD.pre_plug";
-		let vdi = with_xc_and_xs (fun xc xs -> attach_and_activate task xc xs vm vbd vbd.backend) in
+		let vdi = with_xs (fun xs -> attach_and_activate task xs vm vbd vbd.backend) in
 
 		let extra_backend_keys = List.fold_left (fun acc (k,v) ->
 			let k = "sm-data/" ^ k in
@@ -919,7 +919,7 @@ module VBD = struct
 						match vdev, domid with
 						| Some vdev, Some domid ->
 							let open Xenlight.Device_disk in
-							let vdi = attach_and_activate task xc xs vm vbd (Some disk) in
+							let vdi = attach_and_activate task xs vm vbd (Some disk) in
 							let disk' = {of_vdev ctx domid vdev with
 								pdev_path = Some vdi.attach_info.Storage_interface.params;
 								format = Xenlight.DISK_FORMAT_RAW;
@@ -2651,8 +2651,8 @@ module DEBUG = struct
 	let trigger cmd args = match cmd, args with
 		| "reboot", [ k ] ->
 			let uuid = uuid_of_string k in
-			with_xc_and_xs
-				(fun xc xs ->
+			with_xs
+				(fun xs ->
 					match di_of_uuid ~xs Newest uuid with
 						| None -> raise (Does_not_exist("domain", k))
 						| Some di ->
@@ -2661,8 +2661,8 @@ module DEBUG = struct
 				)
 		| "halt", [ k ] ->
 			let uuid = uuid_of_string k in
-			with_xc_and_xs
-				(fun xc xs ->
+			with_xs
+				(fun xs ->
 					match di_of_uuid ~xs Newest uuid with
 						| None -> raise (Does_not_exist("domain", k))
 						| Some di ->
