@@ -272,7 +272,7 @@ let block_device_of_vbd_frontend = function
 		let open Device_common in
 		device.frontend.devid |> Device_number.of_xenstore_key |> Device_number.to_linux_device |> (fun x -> "/dev/" ^ x)
 
-let destroy_vbd_frontend ~xc ~xs task disk =
+let destroy_vbd_frontend ~xs task disk =
 	match disk with
 		| Name _ -> ()
 		| Device device ->
@@ -310,6 +310,7 @@ module Storage = struct
 	let get_disk_by_name = get_disk_by_name
 end
 
+(* TODO: libxl *)
 let with_disk ~xc ~xs task disk write f = match disk with
 	| Local path -> f path
 	| VDI path ->
@@ -328,7 +329,7 @@ let with_disk ~xc ~xs task disk write f = match disk with
 						device |> block_device_of_vbd_frontend |> f
 					)
 					(fun () ->
-						destroy_vbd_frontend ~xc ~xs task device
+						destroy_vbd_frontend ~xs task device
 					)
 			)
 			(fun () -> dp_destroy task dp)
@@ -468,7 +469,7 @@ end
 let _device_id kind = Device_common.string_of_kind kind ^ "-id"
 
 (* Return the xenstore device with [kind] corresponding to [id] *)
-let device_by_id xc xs vm kind domain_selection id =
+let device_by_id xs vm kind domain_selection id =
 	match vm |> uuid_of_string |> domid_of_uuid ~xs domain_selection with
 		| None ->
 			debug "VM = %s; does not exist in domain list" vm;
@@ -533,8 +534,8 @@ module HOST = struct
 end
 
 
+(* TODO: libxl *)
 let on_frontend f domain_selection frontend =
-	(* TODO: libxl *)
 	with_xc_and_xs
 		(fun xc xs ->
 			let frontend_di = match frontend |> uuid_of_string |> di_of_uuid ~xs domain_selection with
@@ -792,7 +793,7 @@ module VBD = struct
 		if not(get_active vm vbd)
 		then debug "VBD %s.%s is not active: not plugging into VM" (fst vbd.Vbd.id) (snd vbd.Vbd.id)
 		else on_frontend
-			(fun xc xs frontend_domid hvm ->
+			(fun _ xs frontend_domid hvm ->
 				if vbd.backend = None && not hvm
 				then info "VM = %s; an empty CDROM drive on a PV guest is simulated by unplugging the whole drive" vm
 				else begin
@@ -828,8 +829,8 @@ module VBD = struct
 
 	let unplug task vm vbd force =
 		let vm_t = DB.read vm in
-		with_xc_and_xs
-			(fun xc xs ->
+		with_xs
+			(fun xs ->
 				try
 					(* On destroying the datapath:
 					   1. if the device has already been shutdown and deactivated (as in suspend) we
@@ -844,7 +845,7 @@ module VBD = struct
 					   to free any storage resources. *)
 					let device =
 						try
-							Some (device_by_id xc xs vm Device_common.Vbd Oldest (id_of vbd))
+							Some (device_by_id xs vm Device_common.Vbd Oldest (id_of vbd))
 						with
 							| (Does_not_exist(_,_)) ->
 								debug "VM = %s; VBD = %s; Ignoring missing domain" vm (id_of vbd);
@@ -891,7 +892,7 @@ module VBD = struct
 								if List.mem_assoc vbd.Vbd.id non_persistent.VmExtra.qemu_vbds then begin
 									let _, qemu_vbd = List.assoc vbd.Vbd.id non_persistent.VmExtra.qemu_vbds in
 									(* destroy_vbd_frontend ignores 'refusing to close' transients' *)
-									destroy_vbd_frontend ~xc ~xs task qemu_vbd;
+									destroy_vbd_frontend ~xs task qemu_vbd;
 									let non_persistent = { non_persistent with
 										VmExtra.qemu_vbds = List.remove_assoc vbd.Vbd.id non_persistent.VmExtra.qemu_vbds } in
 									DB.write vm { vm_t with VmExtra.non_persistent = non_persistent }
@@ -910,7 +911,7 @@ module VBD = struct
 
 	let insert task vm vbd disk =
 		on_frontend
-			(fun xc xs frontend_domid hvm ->
+			(fun _ xs frontend_domid hvm ->
 				if not hvm
 				then plug task vm { vbd with backend = Some disk }
 				else begin
@@ -927,7 +928,7 @@ module VBD = struct
 							} in
 
 							(* We store away the disk so we can implement VBD.stat *)
-							let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+							let (device: Device_common.device) = device_by_id xs vm Device_common.Vbd Newest (id_of vbd) in
 							xs.Xs.write (vdi_path_of_device ~xs device) (disk |> rpc_of_disk |> Jsonrpc.to_string);
 
 							Xenops_task.with_subtask task (Printf.sprintf "Vbd.insert %s" (id_of vbd)) (fun () ->
@@ -948,7 +949,7 @@ module VBD = struct
 
 	let eject task vm vbd =
 		on_frontend
-			(fun xc xs frontend_domid hvm ->
+			(fun _ xs frontend_domid hvm ->
 				with_ctx (fun ctx ->
 					let vdev = Opt.map Device_number.to_linux_device vbd.position in
 					let domid = domid_of_uuid ~xs Newest (uuid_of_string vm) in
@@ -965,7 +966,7 @@ module VBD = struct
 							insert ctx disk' domid ()
 						);
 
-						let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Oldest (id_of vbd) in
+						let (device: Device_common.device) = device_by_id xs vm Device_common.Vbd Oldest (id_of vbd) in
 						safe_rm xs (vdi_path_of_device ~xs device);
 						Storage.dp_destroy task (Storage.id_of vm vbd.Vbd.id)
 					| _ -> ()
@@ -984,7 +985,7 @@ module VBD = struct
 				Opt.iter (function
 					| Ionice qos ->
 						try
-							let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+							let (device: Device_common.device) = device_by_id xs vm Device_common.Vbd Newest (id_of vbd) in
 							let path = Device_common.kthread_pid_path_of_device ~xs device in
 							let kthread_pid = xs.Xs.read path |> int_of_string in
 							ionice qos kthread_pid
@@ -1018,7 +1019,7 @@ module VBD = struct
 		with_xc_and_xs
 			(fun xc xs ->
 				try
-					let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xs vm Device_common.Vbd Newest (id_of vbd) in
 					let qos_target = get_qos xc xs vm vbd device in
 
 					let device_number = device_number_of_device device in
@@ -1045,7 +1046,7 @@ module VBD = struct
 		with_xc_and_xs
 			(fun xc xs ->
 				try
-					let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xs vm Device_common.Vbd Newest (id_of vbd) in
 					if Hotplug.device_is_online ~xs device
 					then begin
 						let qos_target = get_qos xc xs vm vbd device in
@@ -1187,7 +1188,7 @@ module VIF = struct
 		if not(get_active vm vif)
 		then debug "VIF %s.%s is not active: not plugging into VM" (fst vif.Vif.id) (snd vif.Vif.id)
 		else
-			on_frontend (fun xc xs frontend_domid hvm ->
+			on_frontend (fun _ xs frontend_domid hvm ->
 				Xenops_task.with_subtask task (Printf.sprintf "Vif.add %s" (id_of vif))
 					(fun () ->
 						let nic = pre_plug vm hvm vif in
@@ -1218,7 +1219,7 @@ module VIF = struct
 
 	let unplug task vm vif force =
 		with_ctx (fun ctx ->
-			on_frontend (fun xc xs frontend_domid _ ->
+			on_frontend (fun _ xs frontend_domid _ ->
 				try
 					let nic = Xenlight.Device_nic.of_devid ctx frontend_domid vif.position in
 					Xenops_task.with_subtask task (Printf.sprintf "Vif.hard_shutdown %s" (id_of vif)) (fun () ->
@@ -1230,7 +1231,7 @@ module VIF = struct
 							Xenlight.Device_nic.remove ctx nic frontend_domid ()
 						end
 					);
-					let device = device_by_id xc xs vm Device_common.Vif Oldest (id_of vif) in
+					let device = device_by_id xs vm Device_common.Vif Oldest (id_of vif) in
 					Xenops_task.with_subtask task (Printf.sprintf "Vif.release %s" (id_of vif))
 						(fun () -> Hotplug.release' task ~xs device vm "vif" vif.position)
 				with
@@ -1250,11 +1251,11 @@ module VIF = struct
 
 	let move task vm vif network =
 		let vm_t = DB.read_exn vm in
-		with_xc_and_xs
-			(fun xc xs ->
+		with_xs
+			(fun xs ->
 				try
 					(* If the device is gone then this is ok *)
-					let device = device_by_id xc xs vm Device_common.Vif Oldest (id_of vif) in
+					let device = device_by_id xs vm Device_common.Vif Oldest (id_of vif) in
 					let bridge = match network with
 						| Network.Local x -> x
 						| Network.Remote (_, _) -> raise (Unimplemented("network driver domains")) in
@@ -1282,11 +1283,11 @@ module VIF = struct
 		()
 
 	let set_carrier task vm vif carrier =
-		with_xc_and_xs
-			(fun xc xs ->
+		with_xs
+			(fun xs ->
 				try
 					(* If the device is gone then this is ok *)
-					let device = device_by_id xc xs vm Device_common.Vif Newest (id_of vif) in
+					let device = device_by_id xs vm Device_common.Vif Newest (id_of vif) in
 					Device.Vif.set_carrier ~xs device carrier
 				with
 					| (Does_not_exist(_,_)) ->
@@ -1297,10 +1298,10 @@ module VIF = struct
 
 	let set_locking_mode task vm vif mode =
 		let open Device_common in
-		with_xc_and_xs
-			(fun xc xs ->
+		with_xs
+			(fun xs ->
 				(* If the device is gone then this is ok *)
-				let device = device_by_id xc xs vm Vif Newest (id_of vif) in
+				let device = device_by_id xs vm Vif Newest (id_of vif) in
 				let path = Hotplug.get_private_data_path_of_device device in
 				(* Delete the old keys *)
 				List.iter (fun x -> safe_rm xs (path ^ "/" ^ x)) locking_mode_keys;
@@ -1318,10 +1319,10 @@ module VIF = struct
 			)
 
 	let get_state vm vif =
-		with_xc_and_xs
-			(fun xc xs ->
+		with_xs
+			(fun xs ->
 				try
-					let (d: Device_common.device) = device_by_id xc xs vm Device_common.Vif Newest (id_of vif) in
+					let (d: Device_common.device) = device_by_id xs vm Device_common.Vif Newest (id_of vif) in
 					let path = Device_common.kthread_pid_path_of_device ~xs d in
 					let kthread_pid = try xs.Xs.read path |> int_of_string with _ -> 0 in
 					(* We say the device is present unless it has been deleted
@@ -1343,10 +1344,10 @@ module VIF = struct
 			)
 
 	let get_device_action_request vm vif =
-		with_xc_and_xs
-			(fun xc xs ->
+		with_xs
+			(fun xs ->
 				try
-					let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vif Newest (id_of vif) in
+					let (device: Device_common.device) = device_by_id xs vm Device_common.Vif Newest (id_of vif) in
 					if Hotplug.device_is_online ~xs device
 					then None
 					else Some Needs_unplug
@@ -1468,13 +1469,12 @@ module VM = struct
 			else helper (i-1)  (List.hd list :: acc) (List.tl list)
 		in List.rev $ helper n [] list
 
-	let generate_non_persistent_state xc xs vm =
+	let generate_non_persistent_state xs vm =
 		let hvm = match vm.ty with HVM _ -> true | _ -> false in
 		(* XXX add per-vcpu information to the platform data *)
 		(* VCPU configuration *)
 		let pcpus = with_ctx (fun ctx ->
 			Xenlight.Physinfo.((get ctx).nr_cpus)) |> Int32.to_int in
-		(* let pcpus = Xenctrlext.get_max_nr_cpus xc in *)
 		let all_pcpus = pcpus |> Range.make 0 |> Range.to_list in
 		let all_vcpus = vm.vcpu_max |> Range.make 0 |> Range.to_list in
 		let masks = match vm.scheduler_params.affinity with
@@ -1529,9 +1529,9 @@ module VM = struct
 		}
 
 
+	(* TODO: libxl *)
 	let on_domain f domain_selection (task: Xenops_task.t) vm =
 		let uuid = uuid_of_vm vm in
-		(* TODO: libxl *)
 		with_xc_and_xs
 			(fun xc xs ->
 				match di_of_uuid ~xs domain_selection uuid with
@@ -1578,22 +1578,25 @@ module VM = struct
 			)
 
 	let remove vm =
-		(* TODO: libxl *)
-		with_xc_and_xs
-			(fun xc xs ->
+		with_xs
+			(fun xs ->
 				safe_rm xs (Printf.sprintf "/vm/%s" vm.Vm.id);
 				safe_rm xs (Printf.sprintf "/vss/%s" vm.Vm.id);
 			)
 
 	let log_exn_continue msg f x = try f x with e -> debug "Safely ignoring exception: %s while %s" (Printexc.to_string e) msg
 
-	let destroy = on_domain_if_exists (fun xc xs task vm di ->
+	let rec destroy = on_domain_if_exists (fun xc xs task vm di ->
 		let open Xenlight.Dominfo in
 		let domid = di.domid in
 		let qemu_domid = Opt.default (this_domid ~xs) (get_stubdom ~xs domid) in
 		(* We need to clean up the stubdom before the primary otherwise we deadlock *)
 		Opt.iter
+			(* TODO: libxl. We should probably recursively call this destroy
+				 function on the VM's stubdomains, instead of calling the
+				 libxc-based Domain.destroy. Need some refactoring first. *)
 			(fun stubdom_domid ->
+				(* destroy task vm *)
 				Domain.destroy task ~xc ~xs ~qemu_domid stubdom_domid
 			) (get_stubdom ~xs domid);
 
@@ -1628,14 +1631,14 @@ module VM = struct
 		        warn "Ignoring exception in VM.destroy: %s" (Printexc.to_string e)) dps
 	) Oldest
 
-	let pause = on_domain (fun xc xs _ _ di ->
+	let pause = on_domain (fun _ xs _ _ di ->
 		let open Xenlight.Dominfo in
 		if di.current_memkb = 0L then raise (Domain_not_built);
 		with_ctx (fun ctx -> Xenlight.Domain.pause ctx di.domid)
 	(*	Domain.pause ~xc di.domid *)
 	) Newest
 
-	let unpause = on_domain (fun xc xs _ _ di ->
+	let unpause = on_domain (fun _ xs _ _ di ->
 		let open Xenlight.Dominfo in
 		if di.current_memkb = 0L then raise (Domain_not_built);
 		with_ctx (fun ctx -> Xenlight.Domain.unpause ctx di.domid)
@@ -1646,12 +1649,12 @@ module VM = struct
 			) (get_stubdom ~xs di.domid)*)
 	) Newest
 
-	let set_xsdata task vm xsdata = on_domain (fun xc xs _ _ di ->
+	let set_xsdata task vm xsdata = on_domain (fun _ xs _ _ di ->
 		let open Xenlight.Dominfo in
 		Domain.set_xsdata ~xs di.domid xsdata
 	) Newest task vm
 
-	let set_vcpus task vm target = on_domain (fun xc xs _ _ di ->
+	let set_vcpus task vm target = on_domain (fun _ xs _ _ di ->
 		let open Xenlight.Dominfo in
 		if di.domain_type = Xenlight.DOMAIN_TYPE_HVM then
 			raise (Unimplemented("vcpu hotplug for HVM domains"));
@@ -1680,6 +1683,7 @@ module VM = struct
 		)
 	) Newest task vm
 
+	(* TODO: libxl *)
 	let set_shadow_multiplier task vm target = on_domain (fun xc xs _ _ di ->
 		let open Xenlight.Dominfo in
 		if di.domain_type = Xenlight.DOMAIN_TYPE_PV then
@@ -1699,6 +1703,7 @@ module VM = struct
 		Xenctrl.shadow_allocation_set xc domid newshadow;
 	) Newest task vm
 
+	(* TODO: libxl *)
 	let set_memory_dynamic_range task vm min max = on_domain (fun xc xs _ _ di ->
 		let open Xenlight.Dominfo in
 		let domid = di.domid in
@@ -1716,9 +1721,7 @@ module VM = struct
 
                 (* We should prevent leaking files in our filesystem *)
                 let kernel_to_cleanup = ref None in
-		finally (fun () ->
-		(* TODO: libxl *)
-		with_xc_and_xs (fun xc xs ->
+		finally (fun () -> with_xc_and_xs (fun xc xs ->
 			let persistent, non_persistent =
 				match DB.read k with
 					| Some x ->
@@ -1727,7 +1730,7 @@ module VM = struct
 					| None -> begin
 						debug "VM = %s; has no stored domain-level configuration, regenerating" vm.Vm.id;
 						let persistent = { VmExtra.build_info = None; ty = None; last_start_time = Unix.gettimeofday () } in
-						let non_persistent = generate_non_persistent_state xc xs vm in
+						let non_persistent = generate_non_persistent_state xs vm in
 						persistent, non_persistent
 					end in
 			let open Memory in
@@ -1826,14 +1829,15 @@ module VM = struct
 						in
 						(* We can't use libxl's builtin support for a bootloader because it
 						   doesn't understand the convention used by eliloader. *)
-                                                with_disk ~xc ~xs task d false
-                                                        (fun dev ->
-                                                                let b = Bootloader.extract task
-									~bootloader:i.Xenops_interface.Vm.bootloader 
-                                                                        ~legacy_args:i.legacy_args ~extra_args:i.extra_args
-                                                                        ~pv_bootloader_args:i.Xenops_interface.Vm.bootloader_args 
-                                                                        ~disk:dev ~vm:vm.Vm.id () in
-                                                                kernel_to_cleanup := Some b;
+						(* TODO: libxl *)
+            with_disk ~xc ~xs task d false
+              (fun dev ->
+                let b = Bootloader.extract task
+									~bootloader:i.Xenops_interface.Vm.bootloader
+                  ~legacy_args:i.legacy_args ~extra_args:i.extra_args
+                  ~pv_bootloader_args:i.Xenops_interface.Vm.bootloader_args
+                  ~disk:dev ~vm:vm.Vm.id () in
+                kernel_to_cleanup := Some b;
 								{ b_info_default with
 									ty = Pv { b_info_pv_default with
 										kernel = Some b.Bootloader.kernel_path;
@@ -1972,7 +1976,7 @@ module VM = struct
 
 	let request_shutdown task vm reason ack_delay =
 		on_domain
-			(fun xc xs task vm di ->
+			(fun _ xs task vm di ->
 				let open Xenlight.Dominfo in
 				let domid = di.domid in
 				try
@@ -2081,6 +2085,7 @@ module VM = struct
 
 	let save task progress_callback vm flags data =
 		let open Xenlight.Dominfo in
+		(* TODO: libxl *)
 		on_domain
 			(fun xc xs (task:Xenops_task.t) vm di ->
 				let domid = di.domid in
@@ -2137,6 +2142,7 @@ module VM = struct
 	let s3suspend =
 		let open Xenlight.Dominfo in
 		(* XXX: TODO: monitor the guest's response; track the s3 state *)
+		(* TODO: libxl *)
 		on_domain
 			(fun xc xs task vm di ->
 				Domain.shutdown ~xc ~xs di.domid Domain.S3Suspend
@@ -2145,6 +2151,7 @@ module VM = struct
 	let s3resume =
 		let open Xenlight.Dominfo in
 		(* XXX: TODO: monitor the guest's response; track the s3 state *)
+		(* TODO: libxl *)
 		on_domain
 			(fun xc xs task vm di ->
 				Domain.send_s3resume ~xc di.domid
@@ -2288,8 +2295,7 @@ module VM = struct
 		let k = vm.Vm.id in
 		let persistent = state |> Jsonrpc.of_string |> VmExtra.persistent_t_of_rpc in
 		let non_persistent = match DB.read k with
-		(* TODO: libxl *)
-		| None -> with_xc_and_xs (fun xc xs -> generate_non_persistent_state xc xs vm)
+		| None -> with_xs (fun xs -> generate_non_persistent_state xs vm)
 		| Some vmextra -> vmextra.VmExtra.non_persistent
 		in
 		DB.write k { VmExtra.persistent = persistent; VmExtra.non_persistent = non_persistent; }
