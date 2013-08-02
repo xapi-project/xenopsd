@@ -92,6 +92,10 @@ let with_ctx f =
 			error "Xenlight error: %s: %s" (Xenlight.string_of_error a) s;
 			raise e
 
+let get_uuid domid =
+	let open Xenlight.Dominfo in
+	with_ctx (fun ctx -> (get ctx domid).uuid)
+
 (* *)
 
 let run cmd args =
@@ -108,12 +112,305 @@ type attached_vdi = {
 	attach_info: Storage_interface.attach_info;
 }
 
+(* This module is a temporary holdover while we remove the traditional
+	 libxc-based Domain module. *)
+module Domain = struct
+
+	type create_info = {
+		ssidref: int32;
+		hvm: bool;
+		hap: bool;
+		name: string;
+		xsdata: (string * string) list;
+		platformdata: (string * string) list;
+		bios_strings: (string * string) list;
+	} with rpc
+
+	type build_hvm_info = {
+		shadow_multiplier: float;
+		video_mib: int;
+	} with rpc
+
+	type build_pv_info = {
+		cmdline: string;
+		ramdisk: string option;
+	} with rpc
+
+	type builder_spec_info = BuildHVM of build_hvm_info | BuildPV of build_pv_info
+	with rpc
+
+	type build_info = {
+		memory_max: int64;    (* memory max in kilobytes *)
+		memory_target: int64; (* memory target in kilobytes *)
+		kernel: string;       (* in hvm case, point to hvmloader *)
+		vcpus: int;           (* vcpus max *)
+		priv: builder_spec_info;
+	} with rpc
+
+	type domid = int
+
+	exception Domain_stuck_in_dying_state of Xenctrl.domid
+
+	let allowed_xsdata_prefixes = [ "vm-data"; "FIST" ]
+
+	let log_exn_continue msg f x =
+		try f x with e ->
+			debug "Safely ignoring exception: %s while %s" (Printexc.to_string e) msg
+
+	let log_exn_rm ~xs x = log_exn_continue ("xenstore-rm " ^ x) xs.Xs.rm x
+
+	let destroy (task: Xenops_task.t) ~xc ~xs ~qemu_domid domid =
+		let dom_path = xs.Xs.getdomainpath domid in
+		let uuid = get_uuid domid in
+		(* These are the devices with a frontend in [domid] and a
+			 well-formed backend in some other domain *)
+		let all_devices = Device_common.list_frontends ~xs domid in
+
+		debug "VM = %s; domid = %d; Domain.destroy: all known devices = [ %a ]"
+			uuid domid
+			(fun () -> String.concat "; ")
+			(List.map Device_common.string_of_device all_devices);
+		(* Now we should kill the domain itself *)
+		debug "VM = %s; domid = %d; Domain.destroy calling Xenctrl.domain_destroy"
+			uuid domid;
+		log_exn_continue "Xenctrl.domain_destroy" (Xenctrl.domain_destroy xc) domid;
+
+		log_exn_continue "Error stoping device-model, already dead ?"
+			(fun () -> Device.Dm.stop ~xs ~qemu_domid domid) ();
+		log_exn_continue "Error stoping vncterm, already dead ?"
+			(fun () -> Device.PV_Vnc.stop ~xs domid) ();
+
+		(* Forcibly shutdown every backend *)
+		List.iter
+			(fun device ->
+				try
+					Device.hard_shutdown task ~xs device
+				with e ->
+					(* If this fails we may have a resource leak. We should
+						 prevent this from happening! *)
+					error "VM = %s; domid = %d; Caught exception %s while destroying device %s"
+						uuid domid
+						(Printexc.to_string e) (Device_common.string_of_device device);
+			(* Keep going on a best-effort basis *)
+			) all_devices;
+
+		(* For each device which has a hotplug entry, perform the
+			 cleanup. Even if one fails, try to cleanup the rest anyway.*)
+		let released = ref [] in
+		List.iter (fun x ->
+			log_exn_continue ("waiting for hotplug for " ^ (Device_common.string_of_device x))
+				(fun () ->
+					Hotplug.release task ~xs x; released := x :: !released
+				) ()
+		) all_devices;
+
+		(* If we fail to release a device we leak resources. If we are to
+			 tolerate this then we need an async cleanup thread. *)
+		let failed_devices = List.filter (fun x -> not(List.mem x !released)) all_devices in
+		List.iter (fun dev ->
+			error "VM = %s; domid = %d; Domain.destroy failed to release device: %s"
+				uuid domid
+				(Device_common.string_of_device dev)) failed_devices;
+
+		(* Remove our reference to the /vm/<uuid> directory *)
+		let vm_path = try Some (xs.Xs.read (dom_path ^ "/vm")) with _ -> None in
+		Opt.iter (fun vm_path ->
+			xs.Xs.rm (vm_path ^ "/domains/" ^ (string_of_int domid))) vm_path;
+
+		let vss_path = try Some (xs.Xs.read (dom_path ^ "/vss")) with _ -> None in
+		(* If there are no more references then remove /vm/<uuid> and
+			 /vss/<uuid> *)
+		Opt.iter (fun vm_path ->
+			let domains = List.filter (fun x -> x <> "") (xs.Xs.directory (vm_path ^ "/domains")) in
+			if domains = [] then begin
+				debug "xenstore-rm %s" vm_path;
+				xs.Xs.rm vm_path;
+				Opt.iter (fun vss_path ->
+					debug "xenstore-rm %s" vss_path;
+					xs.Xs.rm vss_path
+				) vss_path
+			end
+		) vm_path;
+
+		(* Delete the /local/domain/<domid> and all the backend device
+			 paths *)
+		debug "VM = %s; domid = %d; xenstore-rm %s" uuid domid dom_path;
+		xs.Xs.rm dom_path;
+		debug "VM = %s; domid = %d; deleting backends" uuid domid;
+		let backend_path = xs.Xs.getdomainpath 0 ^ "/backend" in
+		let all_backend_types = try xs.Xs.directory backend_path with _ -> [] in
+		List.iter (fun ty ->
+			log_exn_rm ~xs (Printf.sprintf "%s/%s/%d" backend_path ty domid)) all_backend_types;
+
+		(* If all devices were properly un-hotplugged, then zap the tree in
+			 xenstore.  If there was some error leave the tree for debugging /
+			 async cleanup. *)
+		if failed_devices = []
+		then log_exn_rm ~xs (Hotplug.get_private_path domid);
+
+		(* Block waiting for the dying domain to disappear: aim is to catch
+			 shutdown errors early*)
+		let still_exists () =
+			try
+				let _ = Xenctrl.domain_getinfo xc domid in
+				debug "VM = %s; domid = %d; Domain still exist, waiting for it to disappear."
+					uuid domid;
+				true
+			with
+			| Xenctrl.Error err ->
+				debug "VM = %s; domid = %d; Domain nolonger exists (%s)"
+					uuid domid err;
+				false
+			| e ->
+				error "VM = %s; domid = %d; Xenctrl.domain_getinfo threw: %s"
+					uuid domid (Printexc.to_string e);
+				raise e in
+		let start = Unix.gettimeofday () in
+		let timeout = 60. in
+		while still_exists () && (Unix.gettimeofday () -. start < timeout) do
+			Thread.delay 5.
+		done;
+		if still_exists () then begin
+			(* CA-13801: to avoid confusing people, we shall change this
+				 domain's uuid *)
+			let s = Printf.sprintf "deadbeef-dead-beef-dead-beef0000%04x" domid in
+			error "VM = %s; domid = %d; Domain stuck in dying state after 30s; resetting \
+           UUID to %s. This probably indicates a backend driver bug."
+				uuid domid s;
+			Xenctrl.domain_sethandle xc domid s;
+			raise (Domain_stuck_in_dying_state domid)
+		end
+
+	let pause ~xc domid =
+		Xenctrl.domain_pause xc domid
+
+	let unpause ~xc domid =
+		Xenctrl.domain_unpause xc domid
+
+	let set_xsdata ~xs domid xsdata =
+		(* disallowed by default; allowed only if it has one of a set of prefixes *)
+		let filtered_xsdata =
+			let allowed (x, _) =
+				List.fold_left (||) false
+					(List.map
+						 (fun p -> String.startswith (p ^ "/") x)
+						 allowed_xsdata_prefixes) in
+			List.filter allowed in
+
+		let dom_path = Printf.sprintf "/local/domain/%d" domid in
+		Xs.transaction xs (fun t ->
+			List.iter (fun x -> t.Xst.rm (dom_path ^ "/" ^ x)) allowed_xsdata_prefixes;
+			t.Xst.writev dom_path (filtered_xsdata xsdata))
+
+	(* TODO: libxl *)
+	let wait_xen_free_mem ~xc ?(maximum_wait_time_seconds=64) required_memory_kib : bool =
+		let open Memory in
+		let rec wait accumulated_wait_time_seconds =
+			let host_info = Xenctrl.physinfo xc in
+			let free_memory_kib =
+				kib_of_pages (Int64.of_nativeint host_info.Xenctrl.free_pages) in
+			let scrub_memory_kib =
+				kib_of_pages (Int64.of_nativeint host_info.Xenctrl.scrub_pages) in
+			(* At exponentially increasing intervals, write *)
+			(* a debug message saying how long we've waited: *)
+			if is_power_of_2 accumulated_wait_time_seconds then debug
+				"Waited %i second(s) for memory to become available: \
+			%Ld KiB free, %Ld KiB scrub, %Ld KiB required"
+				accumulated_wait_time_seconds
+				free_memory_kib scrub_memory_kib required_memory_kib;
+			if free_memory_kib >= required_memory_kib
+			(* We already have enough memory. *)
+			then true else
+				if scrub_memory_kib = 0L
+				(* We'll never have enough memory. *)
+				then false else
+					if accumulated_wait_time_seconds >= maximum_wait_time_seconds
+					(* We've waited long enough. *)
+					then false else
+						begin
+							Thread.delay 1.0;
+							wait (accumulated_wait_time_seconds + 1)
+						end in
+		wait 0
+
+	let set_memory_dynamic_range ~xc ~xs ~min ~max domid =
+		let kvs = [
+			"dynamic-min", string_of_int min;
+			"dynamic-max", string_of_int max;
+		] in
+		let uuid = get_uuid domid in
+		debug "VM = %s; domid = %d; set_memory_dynamic_range min = %d; max = %d"
+			uuid domid min max;
+		xs.Xs.writev (Printf.sprintf "%s/memory" (xs.Xs.getdomainpath domid)) kvs
+
+
+	(** Raised if a domain has vanished *)
+	exception Domain_does_not_exist
+
+	type shutdown_reason =
+		PowerOff | Reboot | Suspend | Crash | Halt | S3Suspend | Unknown of int
+
+	(** Request a shutdown, return without waiting for acknowledgement *)
+	let shutdown ~xc ~xs domid req =
+		(** Strings suitable for putting in the control/shutdown xenstore entry *)
+		let string_of_shutdown_reason = function
+			| PowerOff -> "poweroff"
+			| Reboot   -> "reboot"
+			| Suspend  -> "suspend"
+      | Crash    -> "crash" (* this one makes no sense to send to a guest *)
+			| Halt     -> "halt"
+			| S3Suspend -> "s3"
+			| Unknown x -> Printf.sprintf "(unknown %d)" x (* nor this one *)
+		in
+
+		(** Return the path in xenstore watched by the PV shutdown driver *)
+		let control_shutdown ~xs domid =
+			xs.Xs.getdomainpath domid ^ "/control/shutdown" in
+
+		let uuid = get_uuid domid in
+		debug "VM = %s; domid = %d; Requesting domain %s"
+		uuid domid (string_of_shutdown_reason req);
+
+		let reason = string_of_shutdown_reason req in
+		let path = control_shutdown ~xs domid in
+		let domainpath = xs.Xs.getdomainpath domid in
+		Xs.transaction xs
+			(fun t ->
+				(* Fail if the directory has been deleted *)
+				let domain_exists = try ignore (t.Xst.read domainpath); true
+					with Xs_protocol.Enoent _ -> false in
+				if not domain_exists then raise Domain_does_not_exist;
+				(* Delete the node if it already exists. NB: the guest may well
+					 still shutdown for the previous reason... we only want to
+					 give it a kick again just in case. *)
+				(try t.Xst.rm path with _ -> ());
+				t.Xst.write path reason)
+
+	let send_s3resume ~xc domid =
+		let uuid = get_uuid domid in
+		debug "VM = %s; domid = %d; send_s3resume" uuid domid;
+		Xenctrlext.domain_send_s3resume xc domid
+
+	let set_action_request ~xs domid x =
+		let path = xs.Xs.getdomainpath domid ^ "/action-request" in
+		match x with
+		| None -> xs.Xs.rm path
+		| Some v -> xs.Xs.write path v
+
+	let get_action_request ~xs domid =
+		let path = xs.Xs.getdomainpath domid ^ "/action-request" in
+		try
+			Some (xs.Xs.read path)
+		with Xs_protocol.Enoent _ -> None
+
+end
+
 module VmExtra = struct
 	(** Extra data we store per VM. The persistent data is preserved when
-		the domain is suspended so it can be re-used in the following 'create'
-		which is part of 'resume'. The non-persistent data will be regenerated.
-		When a VM is shutdown for other reasons (eg reboot) we throw all this
-		information away and generate fresh data on the following 'create' *)
+			the domain is suspended so it can be re-used in the following 'create'
+			which is part of 'resume'. The non-persistent data will be regenerated.
+			When a VM is shutdown for other reasons (eg reboot) we throw all this
+			information away and generate fresh data on the following 'create' *)
 	type persistent_t = {
 		build_info: Domain.build_info option;
 		ty: Vm.builder_info option;
@@ -235,13 +532,14 @@ let domid_of_uuid ~xs domain_selection uuid =
 		error "Failed to read %s: has this domain already been cleaned up?" dir;
 		None
 
-let get_uuid ~xc domid =
-	let di = with_ctx (fun ctx -> Xenlight.Dominfo.get ctx domid) in
-	uuid_of_string di.Xenlight.Dominfo.uuid
+(* TODO: remove *)
+(* let get_uuid ~xc domid = *)
+(* 	let di = with_ctx (fun ctx -> Xenlight.Dominfo.get ctx domid) in *)
+(* 	uuid_of_string di.Xenlight.Dominfo.uuid *)
 
 let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
-	let frontend_vm_id = get_uuid ~xc frontend_domid |> Uuidm.to_string in
-	let backend_vm_id = get_uuid ~xc vdi.domid |> Uuidm.to_string in
+	let frontend_vm_id = get_uuid frontend_domid in
+	let backend_vm_id = get_uuid vdi.domid in
 	match domid_of_uuid ~xs Expect_only_one (uuid_of_string backend_vm_id) with
 		| None ->
 			error "VM = %s; domid = %d; Failed to determine domid of backend VM id: %s" frontend_vm_id frontend_domid backend_vm_id;
@@ -284,7 +582,7 @@ let destroy_vbd_frontend ~xs task disk =
 					Device.Vbd.clean_shutdown_async ~xs device;
 					Device.Vbd.clean_shutdown_wait task ~xs ~ignore_transients:true device
 				)
-		
+
 module Storage = struct
 	open Storage
 	open Storage_interface
@@ -321,7 +619,7 @@ let with_disk ~xc ~xs task disk write f = match disk with
 		finally
 			(fun () ->
 				let frontend_domid = this_domid ~xs in
-				let frontend_vm = get_uuid ~xc frontend_domid |> Uuidm.to_string in
+				let frontend_vm = get_uuid frontend_domid in
 				let vdi = attach_and_activate ~xs task frontend_vm dp sr vdi write in
 				let device = create_vbd_frontend ~xc ~xs task frontend_domid vdi in
 				finally
@@ -344,11 +642,7 @@ module Mem = struct
 				raise (Cannot_free_this_much_memory(needed, free))
 			| Memory_interface.Domains_refused_to_cooperate domids ->
 				debug "Got error_domains_refused_to_cooperate_code from ballooning daemon";
-				with_ctx (fun ctx ->
-					let open Xenlight.Dominfo in
-					let get_uuid domid = (get ctx domid).uuid in
-					let vms = List.map get_uuid domids in
-					raise (Vms_failed_to_cooperate(vms)))
+				raise (Vms_failed_to_cooperate (List.map get_uuid domids))
 			| Unix.Unix_error(Unix.ECONNREFUSED, "connect", _) ->
 				info "ECONNREFUSED talking to squeezed: assuming it has been switched off";
 				None
@@ -476,7 +770,7 @@ let device_by_id xs vm kind domain_selection id =
 			raise (Does_not_exist("domain", vm))
 		| Some frontend_domid ->
 			let open Device_common in
-			let devices = list_frontends ~xs frontend_domid in
+			let devices = Device_common.list_frontends ~xs frontend_domid in
 
 			let key = _device_id kind in
 			let id_of_device device =
@@ -689,7 +983,7 @@ module VBD = struct
 		| VDI path ->
 			let sr, vdi = Storage.get_disk_by_name task path in
 			Storage.epoch_end task sr vdi
-		| _ -> ()		
+		| _ -> ()
 
 	let vdi_path_of_device ~xs device = Device_common.backend_path_of_device ~xs device ^ "/vdi"
 
@@ -887,7 +1181,7 @@ module VBD = struct
 								) device;
 							*)
 							(* If we have a qemu frontend, detach this too. *)
-							Opt.iter (fun vm_t -> 
+							Opt.iter (fun vm_t ->
 								let non_persistent = vm_t.VmExtra.non_persistent in
 								if List.mem_assoc vbd.Vbd.id non_persistent.VmExtra.qemu_vbds then begin
 									let _, qemu_vbd = List.assoc vbd.Vbd.id non_persistent.VmExtra.qemu_vbds in
@@ -903,7 +1197,7 @@ module VBD = struct
 								Storage.dp_destroy task (Storage.id_of vm vbd.Vbd.id)
 							) domid
 						)
-				with 
+				with
 					| Device_common.Device_error(_, s) ->
 						debug "Caught Device_error: %s" s;
 						raise (Device_detach_rejected("VBD", id_of vbd, s))
@@ -1486,13 +1780,13 @@ module VM = struct
 				let defaults = List.map (fun _ -> m) all_vcpus in
 				take vm.vcpu_max (m :: ms @ defaults) in
 		(* convert a mask into a binary string, one char per pCPU *)
-		let bitmap cpus: string = 
+		let bitmap cpus: string =
 			let cpus = List.filter (fun x -> x >= 0 && x < pcpus) cpus in
 			let result = String.make pcpus '0' in
 			List.iter (fun cpu -> result.[cpu] <- '1') cpus;
 			result in
-		let affinity = 
-			List.mapi (fun idx mask -> 
+		let affinity =
+			List.mapi (fun idx mask ->
 				Printf.sprintf "vcpu/%d/affinity" idx, bitmap mask
 			) masks in
 		let weight = Opt.default [] (Opt.map
@@ -1624,8 +1918,8 @@ module VM = struct
 		log_exn_rm ~xs (Hotplug.get_private_path domid);
 
 		(* Detach any remaining disks *)
-		List.iter (fun dp -> 
-			try 
+		List.iter (fun dp ->
+			try
 				Storage.dp_destroy task dp
 			with e ->
 		        warn "Ignoring exception in VM.destroy: %s" (Printexc.to_string e)) dps
@@ -2687,4 +2981,3 @@ module DEBUG = struct
 			debug "DEBUG.trigger cmd=%s Unimplemented" cmd;
 			raise (Unimplemented(cmd))
 end
-
