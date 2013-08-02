@@ -534,6 +534,7 @@ end
 
 
 let on_frontend f domain_selection frontend =
+	(* TODO: libxl *)
 	with_xc_and_xs
 		(fun xc xs ->
 			let frontend_di = match frontend |> uuid_of_string |> di_of_uuid ~xs domain_selection with
@@ -1530,6 +1531,7 @@ module VM = struct
 
 	let on_domain f domain_selection (task: Xenops_task.t) vm =
 		let uuid = uuid_of_vm vm in
+		(* TODO: libxl *)
 		with_xc_and_xs
 			(fun xc xs ->
 				match di_of_uuid ~xs domain_selection uuid with
@@ -1576,6 +1578,7 @@ module VM = struct
 			)
 
 	let remove vm =
+		(* TODO: libxl *)
 		with_xc_and_xs
 			(fun xc xs ->
 				safe_rm xs (Printf.sprintf "/vm/%s" vm.Vm.id);
@@ -1714,6 +1717,7 @@ module VM = struct
                 (* We should prevent leaking files in our filesystem *)
                 let kernel_to_cleanup = ref None in
 		finally (fun () ->
+		(* TODO: libxl *)
 		with_xc_and_xs (fun xc xs ->
 			let persistent, non_persistent =
 				match DB.read k with
@@ -2123,6 +2127,7 @@ module VM = struct
 			) Oldest task vm
 
 	let restore task progress_callback vm vbds vifs data =
+		(* TODO: libxl *)
 		with_xc_and_xs (fun xc xs ->
 			with_data ~xc ~xs task data false (fun fd ->
 				build ~restore_fd:fd task vm vbds vifs
@@ -2149,6 +2154,7 @@ module VM = struct
 		let open Xenlight.Dominfo in
 		let uuid = uuid_of_vm vm in
 		let vme = vm.Vm.id |> DB.read in (* may not exist *)
+		(* TODO: libxl *)
 		with_xc_and_xs
 			(fun xc xs ->
 				match di_of_uuid ~xs Newest uuid with
@@ -2282,6 +2288,7 @@ module VM = struct
 		let k = vm.Vm.id in
 		let persistent = state |> Jsonrpc.of_string |> VmExtra.persistent_t_of_rpc in
 		let non_persistent = match DB.read k with
+		(* TODO: libxl *)
 		| None -> with_xc_and_xs (fun xc xs -> generate_non_persistent_state xc xs vm)
 		| Some vmextra -> vmextra.VmExtra.non_persistent
 		in
@@ -2638,6 +2645,7 @@ let init () =
 				finally
 				(fun () ->
 					debug "(re)starting xenstore watch thread";
+					(* TODO: libxl *)
 					with_xc register_for_watches)
 				(fun () ->
 					Thread.delay 5.)
