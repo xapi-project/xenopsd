@@ -2218,6 +2218,12 @@ module VM = struct
 				in
 				debug "Xenlight has created domain %d" domid;
 
+				let event_user = 0 in
+				debug "Adding domain_death event watch for domain %d with event \
+				       user %d" domid event_user;
+				Mutex.execute Xenlight_events.xl_m (fun () -> with_ctx (fun ctx ->
+					Xenlight_events.E.evenable_domain_death ctx domid event_user));
+
 				(* Write remaining xenstore keys *)
 				let dom_path = xs.Xs.getdomainpath domid in
 				let vm_path = "/vm/" ^ vm.Vm.id in
@@ -2810,14 +2816,15 @@ let process_one_watch xc xs (path, token) =
 			List.iter (remove_device_watch xs) old_devices;
 		end in
 
-	let fire_event_on_vm domid =
-		let d = int_of_string domid in
-		if not(IntMap.mem d !domains)
-		then debug "Ignoring watch on shutdown domain %d" d
-		else
-			let di = IntMap.find d !domains in
-			let id = di.Xenlight.Dominfo.uuid in
-			Updates.add (Dynamic.Vm id) updates in
+	(* XXX: Moved to Xenlight_events section below; remove after review *)
+	(* let fire_event_on_vm domid = *)
+	(* 	let d = int_of_string domid in *)
+	(* 	if not(IntMap.mem d !domains) *)
+	(* 	then debug "Ignoring watch on shutdown domain %d" d *)
+	(* 	else *)
+	(* 		let di = IntMap.find d !domains in *)
+	(* 		let id = di.Xenlight.Dominfo.uuid in *)
+	(* 		Updates.add (Dynamic.Vm id) updates in *)
 
 	let fire_event_on_device domid kind devid =
 		let d = int_of_string domid in
@@ -2844,8 +2851,8 @@ let process_one_watch xc xs (path, token) =
 			fire_event_on_device frontend kind devid
 		| "local" :: "domain" :: frontend :: "device" :: _ ->
 			look_for_different_devices (int_of_string frontend)
-		| "local" :: "domain" :: domid :: _ ->
-			fire_event_on_vm domid
+		(* | "local" :: "domain" :: domid :: _ -> *)
+		(* 	fire_event_on_vm domid *)
 		| "vm" :: uuid :: "rtc" :: "timeoffset" :: [] ->
 			let timeoffset = try Some (xs.Xs.read path) with _ -> None in
 			Opt.iter
@@ -2934,9 +2941,18 @@ let init () =
 	logger := Some logger';
 
 	with_ctx (fun ctx ->
-		ignore (Xenlight_events.event_loop_init ctx);
-	(*	Xenlight_events.E.evenable_domain_death ctx 47 666 *)
-	);
+		ignore (Xenlight_events.event_loop_init ctx));
+
+	let fire_event_on_vm domid =
+		if not(IntMap.mem domid !domains)
+		then debug "Ignoring watch on shutdown domain %d" domid
+		else
+			let di = IntMap.find domid !domains in
+			let id = di.Xenlight.Dominfo.uuid in
+			Updates.add (Dynamic.Vm id) updates
+	in
+
+	Xenlight_events.fire_event_on_vm := Some fire_event_on_vm ;
 
 	debug "xenstore is responding to requests";
 	let (_: Thread.t) = Thread.create

@@ -17,6 +17,8 @@ let xl_m = Mutex.create ()
 
 (* event callbacks *)
 
+let (fire_event_on_vm : (int -> unit) option ref) = ref None
+
 let event_occurs_callback user event =
 	let open Event in
 	let ty = match event.ty with
@@ -26,7 +28,15 @@ let event_occurs_callback user event =
 		| Operation_complete _ -> "operation complete"
 		| Domain_create_console_available -> "domain create console available"
 	in
-	debug "EVENT occurred: %s, callback user %s, event user %Ld" ty user event.for_user
+	debug "EVENT occurred: %s, callback user %s, event user %Ld"
+		ty user event.for_user ;
+	match event.ty with
+	| Domain_death -> begin
+		match !fire_event_on_vm with
+		| None -> warn "EVENT fire_event_on_vm callback not set, \
+		                ignoring event for domain %d" event.domid
+		| Some f -> f event.domid
+	end
 
 let event_disaster_callback user event_type msg errnoval =
 	debug "EVENT disaster: %s, user %s" msg user
