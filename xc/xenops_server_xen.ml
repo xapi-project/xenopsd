@@ -1662,11 +1662,17 @@ module VBD = struct
 							end
 						| _, _, _ -> None in
 					(* Remember what we've just done *)
-					Opt.iter (fun q ->
-						let non_persistent = { vm_t.VmExtra.non_persistent with
-							VmExtra.qemu_vbds = (vbd.Vbd.id, q) :: vm_t.VmExtra.non_persistent.VmExtra.qemu_vbds} in
-						DB.write vm { vm_t with VmExtra.non_persistent = non_persistent }
-					) qemu_frontend
+					(* Dom0 doesn't have a vm_t - we don't need this currently, but when we have storage driver domains, 
+						we will. Also this causes the SMRT tests to fail, as they demand the loopback VBDs *)
+					if this_domid ~xs <> 0 then
+						begin
+							let vm_t = DB.read_exn vm in
+							Opt.iter (fun q ->
+							let non_persistent = { vm_t.VmExtra.non_persistent with
+								VmExtra.qemu_vbds = (vbd.Vbd.id, q) :: vm_t.VmExtra.non_persistent.VmExtra.qemu_vbds} in
+								DB.write vm { vm_t with VmExtra.non_persistent = non_persistent }
+							) qemu_frontend
+						end
 				end
 			) Newest vm
 
