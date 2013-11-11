@@ -17,8 +17,6 @@ open Xenops_task
 module D = Debug.Make(struct let name = "xenguesthelper" end)
 open D
 
-(** Where to place the last xenguesthelper debug log (just in case) *)
-let last_log_file = "/tmp/xenguesthelper-log"
 
 (* Exceptions which may propagate from the xenguest binary *)
 exception Xenctrl_dom_allocate_failure of int * string
@@ -40,7 +38,8 @@ let connect path domid (args: string list) (fds: (string * Unix.file_descr) list
 	(* Need to send commands and receive responses from the
 	   slave process *)
 
-	let last_log_file = Printf.sprintf "/tmp/xenguest.%d.log" domid in
+(** Move the xenguesthelper debug log to xensource.log *)
+	let last_log_file = Printf.sprintf "/var/log/xensource.log" in
 
 	let slave_to_server_w_uuid = Uuidm.to_string (Uuidm.create `V4) in
 	let server_to_slave_r_uuid = Uuidm.to_string (Uuidm.create `V4) in
