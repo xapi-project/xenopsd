@@ -23,6 +23,8 @@ open Xenops_task
 module D = Debug.Make(struct let name = service_name end)
 open D
 
+module RRDD = Rrd_client.Client
+
 let simplified = false
 
 (* libxl_internal.h:DISABLE_UDEV_PATH *)
@@ -792,7 +794,7 @@ module VM = struct
 			) (get_stubdom ~xs domid);
 
 		let devices = Device_common.list_frontends ~xs domid in
-		let vbds = List.filter (fun device -> Device_common.(device.frontend.kind = Vbd)) devices in
+		let vbds = List.filter (fun device -> match Device_common.(device.frontend.kind) with Device_common.Vbd _ -> true | _ -> false) devices in
 		let dps = List.map (fun device -> Device.Generic.get_private_key ~xs device _dp_id) vbds in
 
 		(* Normally we throw-away our domain-level information. If the domain
@@ -927,7 +929,7 @@ module VM = struct
 				} in
 			let bridge_of_network = function
 				| Network.Local b -> b
-				| Network.Remote (_, _) -> failwith "Need to create a VIF frontend" in
+				| Network.Remote (_, b) -> b in
 			let nics = List.map (fun vif ->
 				vif.Vif.mac,
 				bridge_of_network vif.Vif.backend,
@@ -1234,7 +1236,7 @@ module VM = struct
 						let d = DB.read_exn vm.Vm.id in
 
 						let devices = Device_common.list_frontends ~xs domid in
-						let vbds = List.filter (fun device -> Device_common.(device.frontend.kind = Vbd)) devices in
+						let vbds = List.filter (fun device -> match Device_common.(device.frontend.kind) with Device_common.Vbd _ -> true | _ -> false) devices in
 						List.iter (Device.Vbd.hard_shutdown_request ~xs) vbds;
 						List.iter (Device.Vbd.hard_shutdown_wait task ~xs ~timeout:30.) vbds;
 						debug "VM = %s; domid = %d; Disk backends have all been flushed" vm.Vm.id domid;
@@ -1597,6 +1599,8 @@ module VBD = struct
 			Storage.epoch_end task sr vdi
 		| _ -> ()		
 
+	let device_kind_of vbd = Device.Vbd.device_kind_of_backend_keys vbd.extra_backend_keys
+
 	let vdi_path_of_device ~xs device = Device_common.backend_path_of_device ~xs device ^ "/vdi"
 
 	let plug task vm vbd =
@@ -1617,8 +1621,10 @@ module VBD = struct
 						let k = "sm-data/" ^ k in
 						(k,v)::(List.remove_assoc k acc)) vbd.extra_backend_keys vdi.attach_info.Storage_interface.xenstore_data in
 
+					let device_kind = device_kind_of vbd in
+
 					(* Remember the VBD id with the device *)
-					let vbd_id = _device_id Device_common.Vbd, id_of vbd in
+					let vbd_id = _device_id device_kind, id_of vbd in
 					(* Remember the VDI with the device (for later deactivation) *)
 					let vdi_id = _vdi_id, vbd.backend |> rpc_of_backend |> Jsonrpc.to_string in
 					let dp_id = _dp_id, Storage.id_of (string_of_int frontend_domid) vbd.Vbd.id in
@@ -1638,7 +1644,7 @@ module VBD = struct
 						protocol = None;
 						extra_backend_keys;
 						extra_private_keys = dp_id :: vdi_id :: vbd_id :: vbd.extra_private_keys;
-						backend_domid = vdi.domid
+						backend_domid = vdi.domid;
 					} in
 					let device =
 						Xenops_task.with_subtask task (Printf.sprintf "Vbd.add %s" (id_of vbd))
@@ -1690,7 +1696,7 @@ module VBD = struct
 					   to free any storage resources. *)
 					let device =
 						try
-							Some (device_by_id xc xs vm Device_common.Vbd Oldest (id_of vbd))
+							Some (device_by_id xc xs vm (device_kind_of vbd) Oldest (id_of vbd))
 						with
 							| (Does_not_exist(_,_)) ->
 								debug "VM = %s; VBD = %s; Ignoring missing domain" vm (id_of vbd);
@@ -1745,7 +1751,7 @@ module VBD = struct
 				if not hvm
 				then plug task vm { vbd with backend = Some disk }
 				else begin
-					let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
 					let vdi = attach_and_activate task xc xs frontend_domid vbd (Some disk) in
 					let device_number = device_number_of_device device in
 					let phystype = Device.Vbd.Phys in
@@ -1758,7 +1764,7 @@ module VBD = struct
 	let eject task vm vbd =
 		on_frontend
 			(fun xc xs frontend_domid hvm ->
-				let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Oldest (id_of vbd) in
+				let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Oldest (id_of vbd) in
 
 				let device_number = device_number_of_device device in
 				Device.Vbd.media_eject ~xs ~device_number frontend_domid;
@@ -1778,7 +1784,7 @@ module VBD = struct
 				Opt.iter (function
 					| Ionice qos ->
 						try
-							let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+							let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
 							let path = Device_common.kthread_pid_path_of_device ~xs device in
 							let kthread_pid = xs.Xs.read path |> int_of_string in
 							ionice qos kthread_pid
@@ -1812,7 +1818,7 @@ module VBD = struct
 		with_xc_and_xs
 			(fun xc xs ->
 				try
-					let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
 					let qos_target = get_qos xc xs vm vbd device in
 
 					let device_number = device_number_of_device device in
@@ -1839,7 +1845,7 @@ module VBD = struct
 		with_xc_and_xs
 			(fun xc xs ->
 				try
-					let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vbd Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
 					if Hotplug.device_is_online ~xs device
 					then begin
 						let qos_target = get_qos xc xs vm vbd device in
@@ -1942,7 +1948,7 @@ module VIF = struct
 							Device.Vif.add ~xs ~devid:vif.position
 								~netty:(match vif.backend with
 									| Network.Local x -> Netman.Vswitch x
-									| Network.Remote (_, _) -> raise (Unimplemented "network driver domains"))
+									| Network.Remote (_, x) -> Netman.Vswitch x)
 								~mac:vif.mac ~carrier:(vif.carrier && (vif.locking_mode <> Xenops_interface.Vif.Disabled))
 								~mtu:vif.mtu ~rate:vif.rate ~backend_domid
 								~other_config:vif.other_config
@@ -2144,6 +2150,7 @@ module Actions = struct
 			sprintf "/local/domain/%d/console/vnc-port" domid;
 			sprintf "/local/domain/%d/console/tc-port" domid;
 			sprintf "/local/domain/%d/device" domid;
+			sprintf "/local/domain/%d/rrd" domid;
 			sprintf "/local/domain/%d/vm-data" domid;
 			sprintf "/vm/%s/rtc/timeoffset" uuid;
 		]
@@ -2236,7 +2243,7 @@ module Actions = struct
 				let open Xenctrl in
 				let id = Uuidm.to_string (uuid_of_di di) in
 				let update = match kind with
-					| "vbd" ->
+					| "vbd" | "vbd3" ->
 						let devid' = devid |> int_of_string |> Device_number.of_xenstore_key |> Device_number.to_linux_device in
 						Some (Dynamic.Vbd (id, devid'))
 					| "vif" -> Some (Dynamic.Vif (id, devid))
@@ -2245,12 +2252,77 @@ module Actions = struct
 						None in
 				Opt.iter (fun x -> Updates.add x updates) update in
 
+		let register_rrd_plugin ~domid ~name ~grant_refs ~protocol =
+			debug
+				"Registering RRD plugin: frontend_domid = %d, name = %s, refs = [%s]"
+				domid name
+				(List.map string_of_int grant_refs |> String.concat ";");
+			let (_: float) = RRDD.Plugin.Interdomain.register
+				~uid:{
+					Rrd_interface.name = name;
+					frontend_domid = domid
+				}
+				~info:{
+					Rrd_interface.frequency = Rrd.Five_Seconds;
+					shared_page_refs = grant_refs
+				}
+				~protocol
+			in ()
+		in
+
+		let deregister_rrd_plugin ~domid ~name =
+			debug
+				"Deregistering RRD plugin: frontend_domid = %d, name = %s"
+				domid name;
+			let uid = {Rrd_interface.name = name; frontend_domid = domid} in
+			RRDD.Plugin.Interdomain.deregister ~uid
+		in
+
 		match List.filter (fun x -> x <> "") (Re_str.split (Re_str.regexp_string "/") path) with
 			| "local" :: "domain" :: domid :: "backend" :: kind :: frontend :: devid :: _ ->
 				debug "Watch on backend domid: %s kind: %s -> frontend domid: %s devid: %s" domid kind frontend devid;
 				fire_event_on_device frontend kind devid
 			| "local" :: "domain" :: frontend :: "device" :: _ ->
 				look_for_different_devices (int_of_string frontend)
+			| "local" :: "domain" :: domid :: "rrd" :: name :: "ready" :: [] -> begin
+				debug "Watch picked up an RRD plugin: domid = %s, name = %s" domid name;
+				try
+					let grant_refs_path =
+						Printf.sprintf "/local/domain/%s/rrd/%s/grantrefs" domid name
+					in
+					let protocol_path =
+						Printf.sprintf "/local/domain/%s/rrd/%s/protocol" domid name
+					in
+					let grant_refs = xs.Xs.read grant_refs_path
+						|> Re_str.split (Re_str.regexp_string ",")
+						|> List.map int_of_string
+					in
+					let protocol = Rpc.String (xs.Xs.read protocol_path)
+						|> Rrd_interface.plugin_protocol_of_rpc
+					in
+					register_rrd_plugin
+						~domid:(int_of_string domid) ~name ~grant_refs ~protocol
+				with e ->
+					debug
+						"Failed to register RRD plugin: caught %s"
+						(Printexc.to_string e)
+			end
+			| "local" :: "domain" :: domid :: "rrd" :: name :: "shutdown" :: [] ->
+				let value =
+					try Some (xs.Xs.read path)
+					with Xs_protocol.Enoent _ -> None
+				in
+				if value = Some "true" then begin
+					debug
+						"RRD plugin has announced shutdown: domid = %s, name = %s"
+						domid name;
+					safe_rm xs (Printf.sprintf "local/domain/%s/rrd/%s" domid name);
+					try deregister_rrd_plugin ~domid:(int_of_string domid) ~name
+					with e ->
+						debug
+							"Failed to deregister RRD plugin: caught %s"
+							(Printexc.to_string e)
+				end
 			| "local" :: "domain" :: domid :: _ ->
 				fire_event_on_vm domid
 			| "vm" :: uuid :: "rtc" :: "timeoffset" :: [] ->
