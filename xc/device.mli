@@ -38,7 +38,6 @@ sig
 	type physty = File | Phys | Qcow | Vhd | Aio
 	val string_of_physty : physty -> string
 	val physty_of_string : string -> physty
-	val kind_of_physty : physty -> kind
 	val uses_blktap : phystype:physty -> bool
 
 	type devty = CDROM | Disk
@@ -58,14 +57,14 @@ sig
 		backend_domid: int;
 	}
 
+	val device_kind_of_backend_keys : (string * string) list -> kind
+
 	val add : Xenops_task.t -> xs:Xenstore.Xs.xsh -> hvm:bool -> t -> Xenctrl.domid -> device
 
 	val release : Xenops_task.t -> xs:Xenstore.Xs.xsh -> device -> unit
-	val media_eject : xs:Xenstore.Xs.xsh -> device_number:Device_number.t -> int -> unit
-	val media_insert : xs:Xenstore.Xs.xsh -> device_number:Device_number.t
-	                -> params:string -> phystype:physty -> int -> unit
-	val media_is_ejected : xs:Xenstore.Xs.xsh -> device_number:Device_number.t -> int -> bool
-	val media_tray_is_locked : xs:Xenstore.Xs.xsh -> device_number:Device_number.t -> int -> bool
+	val media_eject : xs:Xenstore.Xs.xsh -> device -> unit
+	val media_insert : xs:Xenstore.Xs.xsh -> phystype:physty -> params:string -> device -> unit
+	val media_is_ejected : xs:Xenstore.Xs.xsh -> device -> bool
 
 	val clean_shutdown_async : xs:Xenstore.Xs.xsh -> device -> unit
 	val clean_shutdown_wait : Xenops_task.t -> xs:Xenstore.Xs.xsh -> ignore_transients:bool -> device -> unit
@@ -130,14 +129,18 @@ sig
 	val to_string: dev -> string
 	val of_string: string -> dev
 
+	type supported_driver =
+		| Nvidia
+		| Pciback
+
 	exception Cannot_use_pci_with_no_pciback of t list
 
 	val add : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> hvm:bool -> msitranslate:int -> pci_power_mgmt:int
-	       -> ?flrscript:string option -> dev list -> Xenctrl.domid -> int -> unit
+		-> ?flrscript:string option -> dev list -> Xenctrl.domid -> int -> unit
 	val release : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> hvm:bool
-	       -> (int * int * int * int) list -> Xenctrl.domid -> int -> unit
+		-> dev list -> Xenctrl.domid -> int -> unit
 	val reset : xs:Xenstore.Xs.xsh -> dev -> unit
-	val bind : dev list -> unit
+	val bind : dev list -> supported_driver -> unit
 	val plug : Xenops_task.t -> xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> dev -> Xenctrl.domid -> unit
 	val unplug : Xenops_task.t -> xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> dev -> Xenctrl.domid -> unit
 	val list : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> Xenctrl.domid -> (int * dev) list
@@ -166,6 +169,7 @@ sig
 	type disp_intf_opt =
 	    | Std_vga
 	    | Cirrus
+	    | Vgpu
 	val disp_intf_opt_of_rpc: Rpc.t -> disp_intf_opt
 	val rpc_of_disp_intf_opt: disp_intf_opt -> Rpc.t
 
@@ -177,6 +181,14 @@ sig
 		| Intel of disp_intf_opt * int option
 
 	type media = Disk | Cdrom
+
+	type vgpu_t = {
+		(* The PCI device on which the vGPU will run. *)
+		pci_id: string;
+		(* Path to the vGPU config file, plus comma-separated extra arguments. *)
+		config: string;
+	}
+
 
 	type info = {
 		memory: int64;
@@ -192,6 +204,7 @@ sig
 		disp: disp_opt;
 		pci_emulations: string list;
 		pci_passthrough: bool;
+		vgpu: vgpu_t option;
 
 		(* Xenclient extras *)
 		xenclient_enabled: bool;

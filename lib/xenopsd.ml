@@ -28,10 +28,13 @@ let worker_pool_size = ref 4
 let run_hotplug_scripts = ref true
 let hotplug_timeout = ref 300.
 let qemu_dm_ready_timeout = ref 300.
+let vgpu_ready_timeout = ref 30.
 let use_qdisk = ref false
 let use_upstream_qemu = ref false
 
 let watch_queue_length = ref 1000
+
+let default_vbd_backend_kind = ref "vbd"
 
 let options = [
     "queue", Arg.Set_string Xenops_interface.queue_name, (fun () -> !Xenops_interface.queue_name), "Listen on a specific queue";
@@ -45,6 +48,7 @@ let options = [
     "watch_queue_length", Arg.Set_int watch_queue_length, (fun () -> string_of_int !watch_queue_length), "Maximum number of unprocessed xenstore watch events before we restart";
     "use-qdisk", Arg.Bool (fun x -> use_qdisk := x), (fun () -> string_of_bool !use_qdisk), "True if we want to use QEMU as our storage backend";
     "use-upstream-qemu", Arg.Bool (fun x -> use_upstream_qemu := x), (fun () -> string_of_bool !use_upstream_qemu), "True if we want to use upsteam QEMU";
+	"default-vbd-backend-kind", Arg.Set_string default_vbd_backend_kind, (fun () -> !default_vbd_backend_kind), "Default backend for VBDs";
 ]
 
 let path () = Filename.concat !sockets_path "xenopsd"

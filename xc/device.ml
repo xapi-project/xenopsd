@@ -341,14 +341,6 @@ let devty_of_string = function
 	| "disk"  -> Disk
 	| _       -> invalid_arg "devty_of_string"
 
-let kind_of_physty physty =
-	match physty with
-	| Qcow -> Tap
-	| Vhd  -> Tap
-	| Aio  -> Tap
-	| Phys -> Vbd
-	| File -> Vbd
-
 let add_backend_keys ~xs (x: device) subdir keys =
 	let backend_stub = backend_path_of_device ~xs x in
 	let backend = backend_stub ^ "/" ^ subdir in
@@ -487,6 +479,10 @@ type t = {
 	backend_domid: int;
 }
 
+let device_kind_of_backend_keys backend_keys =
+	try Device_common.vbd_kind_of_string (List.assoc "backend-kind" backend_keys)
+	with Not_found -> Device_common.Vbd !Xenopsd.default_vbd_backend_kind
+
 let add_async ~xs ~hvm x domid =
 	let back_tbl = Hashtbl.create 16 and front_tbl = Hashtbl.create 16 in
 	let open Device_number in
@@ -496,8 +492,9 @@ let add_async ~xs ~hvm x domid =
 		| None ->
 			make (free_device ~xs (if hvm then Ide else Xen) domid) in
 	let devid = to_xenstore_key device_number in
+	let kind = device_kind_of_backend_keys x.extra_backend_keys in
 	let device = 
-	  let backend = { domid = x.backend_domid; kind = Vbd; devid = devid } 
+	  let backend = { domid = x.backend_domid; kind = kind; devid = devid }
 	  in  device_of_backend backend domid
 	in
 
@@ -593,16 +590,14 @@ let add (task: Xenops_task.t) ~xs ~hvm x domid =
 		done; Opt.unbox !result in
 	add_wait task ~xs device
 
-let qemu_media_change ~xs ~device_number domid _type params =
-	let devid = Device_number.to_xenstore_key device_number in
-	let back_dom_path = xs.Xs.getdomainpath 0 in
-	let backend  = sprintf "%s/backend/vbd/%u/%d" back_dom_path domid devid in
-	let path = backend ^ "/params" in
+let qemu_media_change ~xs device _type params =
+	let backend_path  = (backend_path_of_device ~xs device) in
+	let params_path = backend_path ^ "/params" in
 
 	(* unfortunately qemu filter the request if on the same string it has,
 	   so we trick it by having a different string, but the same path, adding a
 	   spurious '/' character at the beggining of the string.  *)
-	let oldval = try xs.Xs.read path with _ -> "" in
+	let oldval = try xs.Xs.read params_path with _ -> "" in
 	let pathtowrite =
 		if oldval = params then (
 			"/" ^ params
@@ -613,30 +608,18 @@ let qemu_media_change ~xs ~device_number domid _type params =
 		"type",           _type;
 		"params",         pathtowrite;
 	] in
-	Xs.transaction xs (fun t -> t.Xst.writev backend back_delta);
+	Xs.transaction xs (fun t -> t.Xst.writev backend_path back_delta);
 	debug "Media changed: params = %s" pathtowrite
 
-let media_tray_is_locked ~xs ~device_number domid =
-	let devid = Device_number.to_xenstore_key device_number in
-  let backend = { domid = 0; kind = Vbd; devid = devid } in
-  let path = sprintf "%s/locked" (backend_path ~xs backend domid) in
-    try
-      xs.Xs.read path = "true"
-    with _ ->
-      false
+let media_eject ~xs device =
+	qemu_media_change ~xs device "" ""
 
-let media_eject ~xs ~device_number domid =
-	qemu_media_change ~xs ~device_number domid "" ""
-
-let media_insert ~xs ~device_number ~params ~phystype domid =
+let media_insert ~xs ~phystype ~params device =
 	let _type = backendty_of_physty phystype in
-	qemu_media_change ~xs ~device_number domid _type params
+	qemu_media_change ~xs device _type params
 
-let media_is_ejected ~xs ~device_number domid =
-	let devid = Device_number.to_xenstore_key device_number in
-	let back_dom_path = xs.Xs.getdomainpath 0 in
-	let backend = sprintf "%s/backend/vbd/%u/%d" back_dom_path domid devid in
-	let path = backend ^ "/params" in
+let media_is_ejected ~xs device =
+	let path = (backend_path_of_device ~xs device) ^ "/params" in
 	try xs.Xs.read path = "" with _ -> true
 
 end
@@ -900,27 +883,29 @@ let stop ~xs domid =
 
 end
 
-module Qemu = struct
+module type DAEMONPIDPATH = sig
+	val pid_path : int -> string
+end
 
-	(* Where qemu-dm-wrapper writes its pid *)
-	let qemu_pid_path domid = sprintf "/local/domain/%d/qemu-pid" domid
-
+module DaemonMgmt (D : DAEMONPIDPATH) = struct
+	let pid_path = D.pid_path
 	let pid ~xs domid =
 		try
-			let pid = xs.Xs.read (qemu_pid_path domid) in
+			let pid = xs.Xs.read (pid_path domid) in
 			Some (int_of_string pid)
-		with _ ->
-			None
+		with _ -> None
 	let is_running ~xs domid =
-
 		match pid ~xs domid with
 			| None -> false
 			| Some p ->
 				try
-					Unix.kill p 0;
+					Unix.kill p 0; (* This checks the existence of pid p *)
 					true
 				with _ -> false
 end
+
+module Qemu = DaemonMgmt(struct let pid_path domid = sprintf "/local/domain/%d/qemu-pid" domid end)
+module Vgpu = DaemonMgmt(struct let pid_path domid = sprintf "/local/domain/%d/vgpu-pid" domid end)
 
 module PCI = struct
 
@@ -1180,34 +1165,130 @@ let do_flr device =
 	);
 	callscript "flr-post" device
 
-let bind pcidevs =
-	let bind_to_pciback device =
-		let newslot = "/sys/bus/pci/drivers/pciback/new_slot" in
-		let bind = "/sys/bus/pci/drivers/pciback/bind" in
-		write_string_to_file newslot device;
-		write_string_to_file bind device;
-		do_flr device;
+type supported_driver =
+	| Nvidia
+	| Pciback
+
+type driver =
+	| Supported of supported_driver
+	| Unsupported of string
+
+let string_of_driver = function
+	| Supported Nvidia -> "nvidia"
+	| Supported Pciback -> "pciback"
+	| Unsupported driver -> driver
+
+let driver_of_string = function
+	| "nvidia" -> Supported Nvidia
+	| "pciback" -> Supported Pciback
+	| driver -> Unsupported driver
+
+let sysfs_devices = "/sys/bus/pci/devices"
+let sysfs_drivers = "/sys/bus/pci/drivers"
+let sysfs_pciback = Filename.concat sysfs_drivers "pciback"
+let sysfs_nvidia = Filename.concat sysfs_drivers "nvidia"
+
+let get_driver devstr =
+	try
+		let sysfs_device = Filename.concat sysfs_devices devstr in
+		Some (Filename.concat sysfs_device "driver"
+			|> Unix.readlink
+			|> Filename.basename
+			|> driver_of_string)
+	with _ -> None
+
+let bind_to_pciback devstr =
+	debug "pci: binding device %s to pciback" devstr;
+	let new_slot = Filename.concat sysfs_pciback "new_slot" in
+	let bind = Filename.concat sysfs_pciback "bind" in
+	write_string_to_file new_slot devstr;
+	write_string_to_file bind devstr
+
+let bind_to_nvidia devstr =
+	debug "pci: binding device %s to nvidia" devstr;
+	let bind = Filename.concat sysfs_nvidia "bind" in
+	write_string_to_file bind devstr
+
+let unbind devstr driver =
+	let driverstr = string_of_driver driver in
+	debug "pci: unbinding device %s from %s" devstr driverstr;
+	let sysfs_driver = Filename.concat sysfs_drivers driverstr in
+	let unbind = Filename.concat sysfs_driver "unbind" in
+	write_string_to_file unbind devstr
+
+let procfs_nvidia = "/proc/driver/nvidia/gpus"
+let bus_id_key = "Bus Location"
+
+let nvidia_smi = "/usr/bin/nvidia-smi"
+let nvidia_unbind_lock = Mutex.create ()
+
+let unbind_from_nvidia devstr =
+	Mutex.execute nvidia_unbind_lock (fun () ->
+		debug "pci: attempting to lock device %s before unbinding from nvidia" devstr;
+		let gpus = Sys.readdir procfs_nvidia in
+		(* Find the GPU with this device ID. *)
+		let rec find_gpu = function
+			| [] ->
+				failwith (Printf.sprintf "Couldn't find GPU with device ID %s" devstr)
+			| gpu :: rest ->
+				let gpu_path = Filename.concat procfs_nvidia gpu in
+				let gpu_info_file = Filename.concat gpu_path "information" in
+				let gpu_info = Unixext.string_of_file gpu_info_file in
+				(* Work around due to PCI ID formatting inconsistency. *)
+				let devstr2 = String.copy devstr in
+				devstr2.[7] <- '.';
+				if false
+					|| (Stringext.String.has_substr gpu_info devstr2)
+					|| (Stringext.String.has_substr gpu_info devstr)
+				then gpu_path
+				else find_gpu rest
 		in
-	List.iter (fun (domain, bus, slot, func) ->
-		let devstr = to_string (domain, bus, slot, func) in
-		let s = "/sys/bus/pci/devices/" ^ devstr in
-		let driver =
-			try Some (Filename.basename (Unix.readlink (s ^ "/driver")))
-			with _ -> None in
-		begin match driver with
-		| None           ->
-			bind_to_pciback devstr
-		| Some "pciback" ->
-			debug "pci: device %s already bounded to pciback" devstr;
-		        do_flr devstr		    
-		| Some d         ->
-			debug "pci: unbounding device %s from driver %s" devstr d;
-			let f = s ^ "/driver/unbind" in
-			write_string_to_file f devstr;
-			bind_to_pciback devstr
-		end;
-	) pcidevs;
-	()
+		(* Disable persistence mode on the device before unbinding it. In future it
+		 * might be worth augmenting gpumon so that it can do this, and to enable
+		 * xapi and/or xenopsd to tell it to do so. *)
+		let (_: string * string) =
+			Forkhelpers.execute_command_get_output
+				nvidia_smi
+				["--id="^devstr; "--persistence-mode=0"]
+		in
+		let unbind_lock_path =
+			Filename.concat (find_gpu (Array.to_list gpus)) "unbindLock"
+		in
+		(* Grab the unbind lock. *)
+		write_string_to_file unbind_lock_path "1\n";
+		(* Unbind if we grabbed the lock; fail otherwise. *)
+		if Unixext.string_of_file unbind_lock_path = "1\n"
+		then unbind devstr (Supported Nvidia)
+		else failwith (Printf.sprintf "Couldn't lock GPU with device ID %s" devstr))
+
+let bind devices new_driver =
+	List.iter
+		(fun device ->
+			let devstr = to_string device in
+			let old_driver = get_driver devstr in
+			match old_driver, new_driver with
+			| None, Nvidia ->
+				debug "pci: device %s not bound" devstr;
+				bind_to_nvidia devstr
+			| Some (Supported Nvidia), Nvidia ->
+				debug "pci: device %s already bound to nvidia; doing nothing" devstr
+			| Some driver, Nvidia ->
+				unbind devstr driver;
+				bind_to_nvidia devstr
+			| None, Pciback ->
+				debug "pci: device %s not bound" devstr;
+				bind_to_pciback devstr;
+				do_flr devstr
+			| Some (Supported Pciback), Pciback ->
+				debug "pci: device %s already bound to pciback; doing flr" devstr;
+				do_flr devstr
+			| Some (Supported Nvidia), Pciback ->
+				unbind_from_nvidia devstr;
+				bind_to_pciback devstr
+			| Some driver, Pciback ->
+				unbind devstr driver;
+				bind_to_pciback devstr)
+		devices
 
 let enumerate_devs ~xs (x: device) =
 	let backend_path = backend_path_of_device ~xs x in
@@ -1278,7 +1359,7 @@ let wait_device_model (task: Xenops_task.t) ~xc ~xs domid =
   let be_domid = 0 in
   let path = device_model_state_path xs be_domid domid in
   let watch = Watch.value_to_appear path |> Watch.map (fun _ -> ()) in
-  let shutdown = Watch.key_to_disappear (Qemu.qemu_pid_path domid) in
+  let shutdown = Watch.key_to_disappear (Qemu.pid_path domid) in
   let cancel = Domain domid in
   let (_: bool) = cancellable_watch cancel [ watch; shutdown ] [] task ~xs ~timeout:!Xenopsd.hotplug_timeout () in
   if Qemu.is_running ~xs domid then begin
@@ -1491,7 +1572,7 @@ end
 
 let hard_shutdown (task: Xenops_task.t) ~xs (x: device) = match x.backend.kind with
   | Vif -> Vif.hard_shutdown task ~xs x
-  | Vbd | Tap -> Vbd.hard_shutdown task ~xs x
+  | Vbd _ | Tap -> Vbd.hard_shutdown task ~xs x
   | Pci -> PCI.hard_shutdown task ~xs x
   | Vfs -> Vfs.hard_shutdown task ~xs x
   | Vfb -> Vfb.hard_shutdown task ~xs x
@@ -1499,7 +1580,7 @@ let hard_shutdown (task: Xenops_task.t) ~xs (x: device) = match x.backend.kind w
 
 let clean_shutdown (task: Xenops_task.t) ~xs (x: device) = match x.backend.kind with
   | Vif -> Vif.clean_shutdown task ~xs x
-  | Vbd | Tap -> Vbd.clean_shutdown task ~xs x
+  | Vbd _ | Tap -> Vbd.clean_shutdown task ~xs x
   | Pci -> PCI.clean_shutdown task ~xs x
   | Vfs -> Vfs.clean_shutdown task ~xs x
   | Vfb -> Vfb.clean_shutdown task ~xs x
@@ -1524,6 +1605,7 @@ type usb_opt =
 type disp_intf_opt =
     | Std_vga
     | Cirrus
+    | Vgpu
 with rpc
 
 (* Display output / keyboard input *)
@@ -1536,6 +1618,11 @@ type disp_opt =
 
 type media = Disk | Cdrom
 let string_of_media = function Disk -> "disk" | Cdrom -> "cdrom"
+
+type vgpu_t = {
+	pci_id: string;
+	config: string;
+}
 
 type info = {
 	memory: int64;
@@ -1551,7 +1638,8 @@ type info = {
 	disp: disp_opt;
 	pci_emulations: string list;
 	pci_passthrough: bool;
-	
+	vgpu: vgpu_t option;
+
 	(* Xenclient extras *)
 	xenclient_enabled : bool;
 	hvm : bool;
@@ -1638,6 +1726,7 @@ let get_state ~xs ~qemu_domid domid =
 let cmdline_of_disp info =
 	let vga_type_opts x = 
 	  match x with
+	    | Vgpu -> ["-vgpu"]
 	    | Std_vga -> ["-std-vga"]
 	    | Cirrus -> []
 	in
@@ -1732,69 +1821,99 @@ let vnconly_cmdline ~info ?(extras=[]) domid =
     @ disp_options
     @ (List.fold_left (fun l (k, v) -> ("-" ^ k) :: (match v with None -> l | Some v -> v :: l)) [] extras)
 
+let vgpu_args_of_info info domid =
+	match info.vgpu with
+		| Some vgpu ->
+			[
+				"--domain=" ^ (string_of_int domid);
+				"--vcpus=" ^ (string_of_int info.vcpus);
+				"--gpu=" ^ vgpu.pci_id;
+				"--config=" ^ vgpu.config;
+			]
+		| None -> []
+
 let prepend_wrapper_args domid args =
 	(string_of_int domid) :: args
 
-(* Returns the allocated vnc port number *)
-let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready_timeout) l domid =
-	debug "Device.Dm.start domid=%d args: [%s]" domid (String.concat " " l);
-
-	(* Execute qemu-dm-wrapper, forwarding stdout to the syslog, with the key "qemu-dm-<domid>" *)
-	let syslog_stdout = Forkhelpers.Syslog_WithKey (Printf.sprintf "qemu-dm-%d" domid) in
-	let pid = Forkhelpers.safe_close_and_exec None None None [] ~syslog_stdout dmpath (prepend_wrapper_args domid l) in
-
-        debug "qemu-dm: should be running in the background (stdout redirected to syslog)";
-
-	(* There are two common-cases:
-	   1. (in development) the qemu process may crash
-	   2. (in production) We know qemu is ready (and the domain may be unpaused) when
-	      device-misc/dm-ready is set in the store. See xs-xen.pq.hg:hvm-late-unpause *)
-
-	let qemu_domid = 0 in (* See stubdom.ml for the corresponding kernel code *)
-    let dm_ready = Printf.sprintf "/local/domain/%d/device-model/%d/state" qemu_domid domid in
-	let qemu_pid = Forkhelpers.getpid pid in
-	debug "qemu-dm: pid = %d. Waiting for %s" qemu_pid dm_ready;
-	(* We can't block for both a xenstore key and a process disappearing so we
-	   block for 5s at a time *)
+(* Forks a daemon and waits for a path to appear (optionally with a given value)
+ * and then returns the pid. If this doesn't happen in the timeout then an
+ * exception is raised *)
+let init_daemon ~task ~path ~args ~name ~domid ~xs ~ready_path ?ready_val ~timeout ~cancel _ =
+	debug "Starting daemon: %s with args [%s]" path (String.concat "; " args);
+	let syslog_stdout = Forkhelpers.Syslog_WithKey (Printf.sprintf "%s-%d" name domid) in
+	let pid = Forkhelpers.safe_close_and_exec None None None [] ~syslog_stdout path args in
+	debug
+		"%s: should be running in the background (stdout -> syslog); (fd,pid) = %s"
+		name (Forkhelpers.string_of_pidty pid);
 	begin
 		let finished = ref false in
-		let watch = Watch.value_to_appear dm_ready |> Watch.map (fun _ -> ()) in
-		let cancel = Qemu (qemu_domid, domid) in
+		let watch = Watch.value_to_appear ready_path |> Watch.map (fun _ -> ()) in
 		let start = Unix.gettimeofday () in
 		while Unix.gettimeofday () -. start < timeout && not !finished do
 			Xenops_task.check_cancelling task;
 			try
 				let (_: bool) = cancellable_watch cancel [ watch ] [] task ~xs ~timeout () in
-				let state = try xs.Xs.read dm_ready with _ -> "" in
-				if state = "running" 
-				then finished := true
-				else raise (Ioemu_failed (Printf.sprintf "qemu-dm state not running (%s)" state))
+				let state = try xs.Xs.read ready_path with _ -> "" in
+				match ready_val with
+				| Some value ->
+					if state = value
+					then finished := true
+					else raise (Ioemu_failed (Printf.sprintf "%s state not running (%s)" name state))
+				| None -> finished := true
 			with Watch.Timeout _ ->
 				begin match Forkhelpers.waitpid_nohang pid with
-					| 0, Unix.WEXITED 0 -> () (* still running *)
+					| 0, Unix.WEXITED 0 -> () (* still running => keep waiting *)
 					| _, Unix.WEXITED n ->
-						error "qemu-dm: unexpected exit with code: %d" n;
-						raise (Ioemu_failed "qemu-dm exited unexpectedly")
+						error "%s: unexpected exit with code: %d" name n;
+						raise (Ioemu_failed (Printf.sprintf "%s exited unexpectedly" name))
 					| _, (Unix.WSIGNALED n | Unix.WSTOPPED n) ->
-						error "qemu-dm: unexpected signal: %d" n;
-						raise (Ioemu_failed "qemu-dm exited unexpectedly")
+						error "%s: unexpected signal: %d" name n;
+						raise (Ioemu_failed (Printf.sprintf "%s exited unexpectedly" name))
 				end
 		done
 	end;
-		
-	(* At this point we expect qemu to outlive us; we will never call waitpid *)	
-	Forkhelpers.dontwaitpid pid
+	debug "Daemon initialised: %s" (Printf.sprintf "%s-%d" name domid);
+	pid
+
+let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready_timeout) l info domid =
+	debug "Device.Dm.start domid=%d args: [%s]" domid (String.concat " " l);
+
+	(* start vgpu emulation if appropriate *)
+	let _ = match info.vgpu with
+		| Some vgpu ->
+			(* The below line does nothing if the device is already bound to the
+			 * nvidia driver. We rely on xapi to refrain from attempting to run
+			 * a vGPU on a device which is passed through to a guest. *)
+			PCI.bind [PCI.of_string vgpu.pci_id] PCI.Nvidia;
+			let args = vgpu_args_of_info info domid in
+			let ready_path = Printf.sprintf "/local/domain/%d/vgpu-pid" domid in
+			let cancel = Cancel_utils.Vgpu domid in
+			let vgpu_pid = init_daemon ~task ~path:"/usr/lib/xen/bin/vgpu" ~args
+				~name:"vgpu" ~domid ~xs ~ready_path ~timeout:!Xenopsd.vgpu_ready_timeout ~cancel () in
+			Forkhelpers.dontwaitpid vgpu_pid
+		| None -> () in
+
+	(* Execute qemu-dm-wrapper, forwarding stdout to the syslog, with the key "qemu-dm-<domid>" *)
+	let args = (prepend_wrapper_args domid l) in
+	let qemu_domid = 0 in (* See stubdom.ml for the corresponding kernel code *)
+	let ready_path =
+		Printf.sprintf "/local/domain/%d/device-model/%d/state" qemu_domid domid in
+	let cancel = Cancel_utils.Qemu (qemu_domid, domid) in
+	let qemu_pid = init_daemon ~task ~path:dmpath ~args ~name:"qemu-dm" ~domid
+		~xs ~ready_path ~ready_val:"running" ~timeout ~cancel () in
+	(* At this point we expect qemu to outlive us; we will never call waitpid *)
+	Forkhelpers.dontwaitpid qemu_pid
 
 let start (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info false domid in
-	__start task ~xs ~dmpath ?timeout l domid
+	__start task ~xs ~dmpath ?timeout l info domid
 let restore (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info true domid in
-	__start task ~xs ~dmpath ?timeout l domid
+	__start task ~xs ~dmpath ?timeout l info domid
 
 let start_vnconly (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 	let l = vnconly_cmdline ~info domid in
-	__start task ~xs ~dmpath ?timeout l domid
+	__start task ~xs ~dmpath ?timeout l info domid
 
 (* suspend/resume is a done by sending signals to qemu *)
 let suspend (task: Xenops_task.t) ~xs ~qemu_domid domid =
@@ -1804,25 +1923,39 @@ let resume (task: Xenops_task.t) ~xs ~qemu_domid domid =
 
 (* Called by every domain destroy, even non-HVM *)
 let stop ~xs ~qemu_domid domid  =
-	let qemu_pid_path = Qemu.qemu_pid_path domid in
-	match (Qemu.pid ~xs domid) with
-		| None -> () (* nothing to do *)
+    let qemu_pid_path = Qemu.pid_path domid
+    in
+    let stop_qemu () = (match (Qemu.pid ~xs domid) with
+	    | None -> () (* nothing to do *)
 		| Some qemu_pid ->
 			debug "qemu-dm: stopping qemu-dm with SIGTERM (domid = %d)" domid;
-
 			let open Generic in
-			best_effort "killing qemu-dm"
-				(fun () -> really_kill qemu_pid);
-			best_effort "removing qemu-pid from xenstore"
-				(fun () -> xs.Xs.rm qemu_pid_path);
-			(* best effort to delete the qemu chroot dir; we deliberately want this to fail if the dir is not empty cos it may contain
-			   core files that bugtool will pick up; the xapi init script cleans out this directory with "rm -rf" on boot *)
-			best_effort "removing core files from /var/xen/qemu"
-				(fun () -> Unix.rmdir ("/var/xen/qemu/"^(string_of_int qemu_pid)));
-			best_effort "removing device model path from xenstore"
-				(fun () -> xs.Xs.rm (device_model_path ~qemu_domid domid))
+			    best_effort "killing qemu-dm"
+				    (fun () -> really_kill qemu_pid);
+			    best_effort "removing qemu-pid from xenstore"
+				    (fun () -> xs.Xs.rm qemu_pid_path);
+			    (* best effort to delete the qemu chroot dir; we
+			       deliberately want this to fail if the dir is not
+			       empty cos it may contain core files that bugtool
+			       will pick up; the xapi init script cleans out this
+			       directory with "rm -rf" on boot *)
+			    best_effort "removing core files from /var/xen/qemu"
+				    (fun () -> Unix.rmdir ("/var/xen/qemu/"^(string_of_int qemu_pid)));
+			    best_effort "removing device model path from xenstore"
+				    (fun () -> xs.Xs.rm (device_model_path ~qemu_domid domid)))
+    in
+    let stop_vgpu () = match (Vgpu.pid ~xs domid) with
+        | None -> ()
+        | Some vgpu_pid ->
+            debug "vgpu: stopping vgpu with SIGTERM (domid = %d pid = %d)" domid vgpu_pid;
+            let open Generic in
+                best_effort "killing vgpu"
+                    (fun () -> really_kill vgpu_pid)
+    in
+    stop_vgpu ();
+    stop_qemu ()
 
-end
+end (* End of module Dm *)
 
 let get_vnc_port ~xs domid = 
 	(* Check whether a qemu exists for this domain *)
