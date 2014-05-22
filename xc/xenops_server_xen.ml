@@ -1197,35 +1197,43 @@ module VM = struct
 				(try Unix.rmdir mount_point with e -> debug "Caught %s" (Printexc.to_string e))
 			)
 
+	let has_ext_fs device =
+		(* Check Ext magic value: a 16-bit superblock value (offset 0x38) *)
+		let ext_magic = 0xEF53 in
+		Unixext.with_file device [Unix.O_RDONLY] 0o400 (fun fd ->
+			Unix.lseek fd (1024 + 0x38) Unix.SEEK_SET |> ignore_int;
+			Io.read_int ~endianness:`little fd |> (land) 0xffff = ext_magic
+		)
+
 	(** open a file, and make sure the close is always done *)
 
 	let with_data ~xc ~xs task data write f = match data with
 		| Disk disk ->
-			with_disk ~xc ~xs task disk write
-				(fun path ->
-					if write then mke2fs path;
-					with_mounted_dir path write
-						(fun dir ->
-							(* Do we really want to balloon the guest down? *)
-							let flags =
-								if write
-								then [ Unix.O_WRONLY; Unix.O_CREAT ]
-								else [ Unix.O_RDONLY ] in
-							let filename = dir ^ "/suspend-image" in
-							Unixext.with_file filename flags 0o600
-								(fun fd ->
-									finally
-										(fun () -> f fd)
-										(fun () ->
-											try
-												Fsync.fsync fd;
-											with Unix.Unix_error(Unix.EIO, _, _) ->
-												error "Caught EIO in fsync after suspend; suspend image may be corrupt";
-												raise (IO_error)
-										)
-								)
+			with_disk ~xc ~xs task disk write (fun path ->
+				let with_fd_of_path p f =
+					if has_ext_fs path then
+						try
+							with_mounted_dir p false (fun dir ->
+								let filename = dir ^ "/suspend-image" in
+								Unixext.with_file filename [Unix.O_RDONLY] 0o600 f
+							)
+						with _ -> (* False positive filesystem? Assume raw *)
+							Unixext.with_file path [Unix.O_RDONLY] 0o600 f
+					else (* non-legacy *)
+						let flags = if write then ([Unix.O_WRONLY]) else ([Unix.O_RDONLY]) in
+						Unixext.with_file path flags 0o600 f
+				in
+				with_fd_of_path path (fun fd ->
+					finally
+						(fun () -> f fd)
+						(fun () ->
+							try Fsync.fsync fd;
+							with Unix.Unix_error(Unix.EIO, _, _) ->
+								error "Caught EIO in fsync after suspend; suspend image may be corrupt";
+								raise (IO_error)
 						)
 				)
+			)
 		| FD fd -> f fd
 
 	let save task progress_callback vm flags data =
