@@ -92,7 +92,7 @@ type atomic =
 	| VM_s3suspend of Vm.id
 	| VM_s3resume of Vm.id
 	| VM_save of (Vm.id * flag list * data)
-	| VM_restore of (Vm.id * data)
+	| VM_restore of (Vm.id * data * int)
 	| VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
 
 with rpc
@@ -108,7 +108,7 @@ type operation =
 	| VM_resume of (Vm.id * data)
 	| VM_restore_devices of Vm.id
 	| VM_migrate of (Vm.id * (string * string) list * (string * Network.t) list * string)
-	| VM_receive_memory of (Vm.id * int64 * Unix.file_descr)
+	| VM_receive_memory of (Vm.id * int64 * int * Unix.file_descr)
 	| VBD_hotplug of Vbd.id
 	| VBD_hotunplug of Vbd.id * bool
 	| VIF_hotplug of Vbd.id
@@ -853,7 +853,7 @@ let rec atomics_of_operation = function
 		simplify [
 			VM_create (id, None);
 		] @ [
-			VM_restore (id, data);
+			VM_restore (id, data, !Xenops_interface.suspend_img_fmt);
 		] @ (atomics_of_operation (VM_restore_devices id)
 		) @ [
 			(* At this point the domain is considered survivable. *)
@@ -1066,13 +1066,13 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 		| VM_save (id, flags, data) ->
 			debug "VM.save %s" id;
 			B.VM.save t progress_callback (VM_DB.read_exn id) flags data
-		| VM_restore (id, data) ->
+		| VM_restore (id, data, image_format) ->
 			debug "VM.restore %s" id;
 			if id |> VM_DB.exists |> not
 			then failwith (Printf.sprintf "%s doesn't exist" id);
 			let vbds : Vbd.t list = VBD_DB.vbds id in
 			let vifs : Vif.t list = VIF_DB.vifs id in
-			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data
+			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data image_format
 		| VM_delay (id, t) ->
 			debug "VM %s: waiting for %.2f before next VM action" id t;
 			Thread.delay t
@@ -1080,7 +1080,7 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 (* Used to divide up the progress (bar) amongst atomic operations *)
 let weight_of_atomic = function
 	| VM_save (_, _, _) -> 10.
-	| VM_restore (_, _) -> 10.
+	| VM_restore (_, _, _) -> 10.
 	| _ -> 1.
 
 let progress_callback start len t y =
@@ -1133,7 +1133,7 @@ and trigger_cleanup_after_failure op t = match op with
 	| VM_restore_devices id
 	| VM_resume (id, _)
 	| VM_migrate (id, _, _, _)
-	| VM_receive_memory (id, _, _) ->
+	| VM_receive_memory (id, _, _, _) ->
 		immediate_operation t.Xenops_task.dbg id (VM_check_state id);
 
 	| VBD_hotplug id
@@ -1185,7 +1185,7 @@ and trigger_cleanup_after_failure op t = match op with
 		| VM_s3suspend id
 		| VM_s3resume id
 		| VM_save (id, _, _)
-		| VM_restore (id, _)
+		| VM_restore (id, _, _)
 		| VM_delay (id, _) ->
 			immediate_operation t.Xenops_task.dbg id (VM_check_state id)
 	end
@@ -1272,6 +1272,7 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 						"instance_id", instance_id;
 						"dbg", t.Xenops_task.dbg;
 						"memory_limit", Int64.to_string state.Vm.memory_limit;
+						"image_format", string_of_int !Xenops_interface.suspend_img_fmt;
 					] in
 					let headers = Cohttp.Header.of_list (
 						Cohttp.Cookie.Cookie_hdr.serialize cookies :: [
@@ -1307,7 +1308,7 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 			] in
 			perform_atomics atomics t;
 			VM_DB.signal id
-		| VM_receive_memory (id, memory_limit, s) ->
+		| VM_receive_memory (id, memory_limit, image_format, s) ->
 			debug "VM.receive_memory %s" id;
 			let open Xenops_migrate in
 (*			let state = B.VM.get_state (VM_DB.read_exn id) in
@@ -1325,7 +1326,7 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 			perform_atomics (
 				simplify [VM_create (id, Some memory_limit);
 			] @ [
-				VM_restore (id, FD s);
+				VM_restore (id, FD s, image_format);
 			]) t;
 			debug "VM.receive_memory restore complete";
 			debug "Synchronisation point 2";
@@ -1727,10 +1728,10 @@ module VM = struct
 
 	let migrate context dbg id vdi_map vif_map url = queue_operation dbg id (VM_migrate (id, vdi_map, vif_map, url))
 
-	let migrate_receive_memory _ dbg id memory_limit remote_instance_id c =
+	let migrate_receive_memory _ dbg id memory_limit image_format remote_instance_id c =
 		let is_localhost = instance_id = remote_instance_id in
 		let transferred_fd = Xcp_channel.file_descr_of_t c in
-		let op = VM_receive_memory(id, memory_limit, transferred_fd) in
+		let op = VM_receive_memory(id, memory_limit, image_format, transferred_fd) in
 		(* If it's a localhost migration then we're already in the queue *)
 		if is_localhost then begin
 			immediate_operation dbg id op;
@@ -1745,6 +1746,10 @@ module VM = struct
 		let module Response = Cohttp.Response.Make(Cohttp_posix_io.Unbuffered_IO) in
 		let dbg = List.assoc "dbg" cookies in
 		let memory_limit = List.assoc "memory_limit" cookies |> Int64.of_string in
+		let image_format =
+			try List.assoc "image_format" cookies |> int_of_string
+			with Not_found -> !Xenops_interface_upgrades.legacy_suspend_img_fmt
+		in
 		Debug.with_thread_associated dbg
 		(fun () ->
 			let is_localhost, id = Debug.with_thread_associated dbg
@@ -1759,7 +1764,7 @@ module VM = struct
 			in
 			match context.transferred_fd with
 			| Some transferred_fd ->
-				let op = VM_receive_memory(id, memory_limit, transferred_fd) in
+				let op = VM_receive_memory(id, memory_limit, image_format, transferred_fd) in
 				(* If it's a localhost migration then we're already in the queue *)
 				let task =
 					if is_localhost then begin

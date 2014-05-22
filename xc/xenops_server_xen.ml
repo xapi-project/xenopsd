@@ -1293,7 +1293,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data =
+	let restore task progress_callback vm vbds vifs data image_format =
 		on_domain
 			(fun xc xs task vm di ->
 				let domid = di.Xenctrl.domid in
@@ -1316,7 +1316,7 @@ module VM = struct
 
 						with_data ~xc ~xs task data false
 							(fun fd ->
-								Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) build_info timeoffset (choose_xenguest vm.Vm.platformdata) domid fd
+								Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) build_info timeoffset (choose_xenguest vm.Vm.platformdata) domid fd image_format
 							);
 					with e ->
 						error "VM %s: restore failed: %s" vm.Vm.id (Printexc.to_string e);
