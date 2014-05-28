@@ -92,7 +92,7 @@ type atomic =
 	| VM_s3suspend of Vm.id
 	| VM_s3resume of Vm.id
 	| VM_save of (Vm.id * flag list * data)
-	| VM_restore of (Vm.id * data * int)
+	| VM_restore of (Vm.id * data)
 	| VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
 
 with rpc
@@ -853,7 +853,7 @@ let rec atomics_of_operation = function
 		simplify [
 			VM_create (id, None);
 		] @ [
-			VM_restore (id, data, !Xenops_interface.suspend_img_fmt);
+			VM_restore (id, data);
 		] @ (atomics_of_operation (VM_restore_devices id)
 		) @ [
 			(* At this point the domain is considered survivable. *)
@@ -1066,13 +1066,13 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 		| VM_save (id, flags, data) ->
 			debug "VM.save %s" id;
 			B.VM.save t progress_callback (VM_DB.read_exn id) flags data
-		| VM_restore (id, data, image_format) ->
+		| VM_restore (id, data) ->
 			debug "VM.restore %s" id;
 			if id |> VM_DB.exists |> not
 			then failwith (Printf.sprintf "%s doesn't exist" id);
 			let vbds : Vbd.t list = VBD_DB.vbds id in
 			let vifs : Vif.t list = VIF_DB.vifs id in
-			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data image_format
+			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data
 		| VM_delay (id, t) ->
 			debug "VM %s: waiting for %.2f before next VM action" id t;
 			Thread.delay t
@@ -1080,7 +1080,7 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 (* Used to divide up the progress (bar) amongst atomic operations *)
 let weight_of_atomic = function
 	| VM_save (_, _, _) -> 10.
-	| VM_restore (_, _, _) -> 10.
+	| VM_restore (_, _) -> 10.
 	| _ -> 1.
 
 let progress_callback start len t y =
@@ -1185,7 +1185,7 @@ and trigger_cleanup_after_failure op t = match op with
 		| VM_s3suspend id
 		| VM_s3resume id
 		| VM_save (id, _, _)
-		| VM_restore (id, _, _)
+		| VM_restore (id, _)
 		| VM_delay (id, _) ->
 			immediate_operation t.Xenops_task.dbg id (VM_check_state id)
 	end
@@ -1268,11 +1268,12 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 				(fun mfd ->
 					let open Xenops_migrate in
 					let module Request = Cohttp.Request.Make(Cohttp_posix_io.Unbuffered_IO) in
+					let image_format = !Xenops_interface.suspend_img_fmt in
 					let cookies = [
 						"instance_id", instance_id;
 						"dbg", t.Xenops_task.dbg;
 						"memory_limit", Int64.to_string state.Vm.memory_limit;
-						"image_format", string_of_int !Xenops_interface.suspend_img_fmt;
+						"image_format", string_of_int image_format;
 					] in
 					let headers = Cohttp.Header.of_list (
 						Cohttp.Cookie.Cookie_hdr.serialize cookies :: [
@@ -1291,7 +1292,7 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 					debug "Synchronisation point 1";
 
 					perform_atomics [
-						VM_save(id, [ Live ], FD mfd)
+						VM_save(id, [ Live ], FD (mfd, image_format))
 					] t;
 					debug "Synchronisation point 2";
 
@@ -1326,7 +1327,7 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 			perform_atomics (
 				simplify [VM_create (id, Some memory_limit);
 			] @ [
-				VM_restore (id, FD s, image_format);
+				VM_restore (id, FD (s, image_format));
 			]) t;
 			debug "VM.receive_memory restore complete";
 			debug "Synchronisation point 2";

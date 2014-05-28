@@ -1207,7 +1207,7 @@ module VM = struct
 
 	(** open a file, and make sure the close is always done *)
 
-	let with_data ~xc ~xs task data write f = match data with
+	let with_data ~xc ~xs task data write (f: image_format:int -> Unix.file_descr -> unit) = match data with
 		| Disk disk ->
 			with_disk ~xc ~xs task disk write (fun path ->
 				let with_fd_of_path p f =
@@ -1215,17 +1215,20 @@ module VM = struct
 						try
 							with_mounted_dir p false (fun dir ->
 								let filename = dir ^ "/suspend-image" in
-								Unixext.with_file filename [Unix.O_RDONLY] 0o600 f
+								f ~image_format:!Xenops_interface_upgrades.legacy_suspend_img_fmt
+								|> Unixext.with_file filename [Unix.O_RDONLY] 0o600
 							)
-						with _ -> (* False positive filesystem? Assume raw *)
-							Unixext.with_file path [Unix.O_RDONLY] 0o600 f
+						with _ -> (* False positive filesystem? Assume raw, non-legacy *)
+							f ~image_format:!Xenops_interface.suspend_img_fmt
+							|> Unixext.with_file path [Unix.O_RDONLY] 0o600
 					else (* non-legacy *)
 						let flags = if write then ([Unix.O_WRONLY]) else ([Unix.O_RDONLY]) in
-						Unixext.with_file path flags 0o600 f
+						f ~image_format:!Xenops_interface.suspend_img_fmt
+						|> Unixext.with_file path flags 0o600
 				in
-				with_fd_of_path path (fun fd ->
+				with_fd_of_path path (fun ~image_format fd ->
 					finally
-						(fun () -> f fd)
+						(fun () -> f ~image_format fd)
 						(fun () ->
 							try Fsync.fsync fd;
 							with Unix.Unix_error(Unix.EIO, _, _) ->
@@ -1234,7 +1237,7 @@ module VM = struct
 						)
 				)
 			)
-		| FD fd -> f fd
+		| FD (fd, image_format) -> f ~image_format fd
 
 	let save task progress_callback vm flags data =
 		let flags' =
@@ -1250,7 +1253,7 @@ module VM = struct
 				let qemu_domid = Opt.default (this_domid ~xs) (get_stubdom ~xs domid) in
 
 				with_data ~xc ~xs task data true
-					(fun fd ->
+					(fun ~image_format fd ->
 						Domain.suspend task ~xc ~xs ~hvm ~progress_callback ~qemu_domid (choose_xenguest vm.Vm.platformdata) domid fd flags'
 							(fun () ->
 								if not(request_shutdown task vm Suspend 30.)
@@ -1293,7 +1296,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data image_format =
+	let restore task progress_callback vm vbds vifs data =
 		on_domain
 			(fun xc xs task vm di ->
 				let domid = di.Xenctrl.domid in
@@ -1315,7 +1318,7 @@ module VM = struct
 					try
 
 						with_data ~xc ~xs task data false
-							(fun fd ->
+							(fun ~image_format fd ->
 								Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) build_info timeoffset (choose_xenguest vm.Vm.platformdata) domid fd image_format
 							);
 					with e ->

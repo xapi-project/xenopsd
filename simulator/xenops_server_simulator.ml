@@ -337,7 +337,7 @@ module VM = struct
 	let wait_shutdown _ vm reason timeout = true
 
 	let save _ cb vm flags data = Mutex.execute m (save_nolock vm flags data)
-	let restore _ cb vm vbds vifs data image_format = Mutex.execute m (restore_nolock vm vbds vifs data)
+	let restore _ cb vm vbds vifs data = Mutex.execute m (restore_nolock vm vbds vifs data)
 
 	let s3suspend _ vm = ()
 	let s3resume _ vm = ()

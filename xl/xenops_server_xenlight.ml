@@ -2310,7 +2310,7 @@ module VM = struct
 								)
 						)
 				)
-		| FD fd -> f fd
+		| FD (fd, _) -> f fd
 
 	let save task progress_callback vm flags data =
 		let open Xenlight.Dominfo in
@@ -2372,7 +2372,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data image_format =
+	let restore task progress_callback vm vbds vifs data =
 		with_xs (fun xs ->
 			with_data ~xs task data false (fun fd ->
 				let vbds = List.filter (fun vbd -> vbd.Vbd.mode = Vbd.ReadOnly) vbds in
