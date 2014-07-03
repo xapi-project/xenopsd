@@ -40,7 +40,7 @@ let test = Updates.empty
 let string_of_disk d = d |> rpc_of_disk |> Jsonrpc.to_string
 type data =
 	| Disk of disk
-	| FD of Unix.file_descr
+	| FD of Unix.file_descr * int
 with rpc
 let string_of_data x = x |> rpc_of_data |> Jsonrpc.to_string
 

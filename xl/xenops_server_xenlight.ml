@@ -2297,7 +2297,7 @@ module VM = struct
 								)
 						)
 				)
-		| FD fd -> f fd
+		| FD (fd, _) -> f fd
 
 	let save task progress_callback vm flags data =
 		let open Xenlight.Dominfo in

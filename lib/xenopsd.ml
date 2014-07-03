@@ -113,6 +113,7 @@ let main ?(specific_options=[]) ?(specific_essential_paths=[]) ?(specific_noness
 		~path:(path ())
 		~queue_name:!Xenops_interface.queue_name
 		~rpc_fn
+		~rpc_upgrade_fn:Xenops_interface_upgrades.upgrade
 	        () in
 
 	Xcp_service.maybe_daemonize ();

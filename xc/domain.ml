@@ -736,7 +736,7 @@ let build (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid info timeoff
  * to be we are not trying to restore from random data.
  * the linux_restore process is in charge to allocate memory as it's needed
  *)
-let restore_common (task: Xenops_task.t) ~xc ~xs ~hvm ~store_port ~store_domid ~console_port ~console_domid ~no_incr_generationid ~vcpus ~extras xenguest_path domid fd =
+let restore_common (task: Xenops_task.t) ~xc ~xs ~hvm ~store_port ~store_domid ~console_port ~console_domid ~no_incr_generationid ~vcpus ~extras xenguest_path domid fd image_format =
 	let uuid = get_uuid ~xc domid in
 	let read_signature = Io.read fd (String.length save_signature) in
 	if read_signature <> save_signature then begin
@@ -745,12 +745,16 @@ let restore_common (task: Xenops_task.t) ~xc ~xs ~hvm ~store_port ~store_domid ~
 	end;
 	Unix.clear_close_on_exec fd;
 	let fd_uuid = Uuid.to_string (Uuid.create `V4) in
+	let legacy_image_format =
+		image_format = !Xenops_interface_upgrades.legacy_suspend_img_fmt
+	in
 
 	let line = XenguestHelper.with_connection task xenguest_path domid
 	  ([
 	    "-mode"; if hvm then "hvm_restore" else "restore";
 	    "-domid"; string_of_int domid;
 	    "-fd"; fd_uuid;
+		"legacy_stream"; if legacy_image_format then "1" else "0";
 	    "-store_port"; string_of_int store_port;
 		"-store_domid"; string_of_int store_domid;
 	    "-console_port"; string_of_int console_port;
@@ -777,7 +781,7 @@ let resume (task: Xenops_task.t) ~xc ~xs ~hvm ~cooperative ~qemu_domid domid =
 	resume_post ~xc	~xs domid;
 	if hvm then Device.Dm.resume task ~xs ~qemu_domid domid
 
-let pv_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid ~static_max_kib ~target_kib ~vcpus xenguest_path domid fd =
+let pv_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid ~static_max_kib ~target_kib ~vcpus xenguest_path domid fd image_format =
 
 	(* Convert memory configuration values into the correct units. *)
 	let static_max_mib = Memory.mib_of_kib_used static_max_kib in
@@ -803,7 +807,7 @@ let pv_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_inc
 		~store_port ~store_domid
 		~console_port ~console_domid
 		~no_incr_generationid
-		~vcpus ~extras:[] xenguest_path domid fd in
+		~vcpus ~extras:[] xenguest_path domid fd image_format in
 
 	let local_stuff = [
 		"serial/0/limit",    string_of_int 65536;
@@ -814,7 +818,7 @@ let pv_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_inc
 	build_post ~xc ~xs ~vcpus ~target_mib ~static_max_mib
 		domid store_mfn store_port local_stuff vm_stuff
 
-let hvm_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid ~static_max_kib ~target_kib ~shadow_multiplier ~vcpus  ~timeoffset xenguest_path domid fd =
+let hvm_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid ~static_max_kib ~target_kib ~shadow_multiplier ~vcpus  ~timeoffset xenguest_path domid fd image_format =
 
 	(* Convert memory configuration values into the correct units. *)
 	let static_max_mib = Memory.mib_of_kib_used static_max_kib in
@@ -838,7 +842,7 @@ let hvm_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_in
 		~store_port ~store_domid
 		~console_port ~console_domid
 		~no_incr_generationid
-		~vcpus ~extras:[] xenguest_path domid fd in
+		~vcpus ~extras:[] xenguest_path domid fd image_format in
 	let local_stuff = [
 		"serial/0/limit",    string_of_int 65536;
 (*
@@ -853,7 +857,7 @@ let hvm_restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_in
 	build_post ~xc ~xs ~vcpus ~target_mib ~static_max_mib
 		domid store_mfn store_port local_stuff vm_stuff
 
-let restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid info timeoffset xenguest_path domid fd =
+let restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid info timeoffset xenguest_path domid fd image_format =
 	let restore_fct = match info.priv with
 	| BuildHVM hvminfo ->
 		hvm_restore task ~shadow_multiplier:hvminfo.shadow_multiplier
@@ -863,7 +867,7 @@ let restore (task: Xenops_task.t) ~xc ~xs ~store_domid ~console_domid ~no_incr_g
 		in
 	restore_fct ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid
 	            ~static_max_kib:info.memory_max ~target_kib:info.memory_target ~vcpus:info.vcpus
-	            xenguest_path domid fd
+	            xenguest_path domid fd image_format
 
 type suspend_flag = Live | Debug
 
