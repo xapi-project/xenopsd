@@ -889,6 +889,8 @@ module VM = struct
 					| Cirrus -> Device.Dm.Cirrus, None
 					| Standard_VGA -> Device.Dm.Std_vga, None
 					| IGD_passthrough -> Device.Dm.IGD_passthrough, None
+					| Vgpu when List.assoc vgpu_config_key vm.Vm.platformdata = "dummy" ->
+						Device.Dm.Std_vga, Some {Device.Dm.pci_id = "dummy"; config = "dummy"}
 					| Vgpu ->
 						let vgpu =
 							try
