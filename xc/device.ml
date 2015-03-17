@@ -1832,9 +1832,8 @@ let vnconly_cmdline ~info ?(extras=[]) domid =
     @ (List.fold_left (fun l (k, v) -> ("-" ^ k) :: (match v with None -> l | Some v -> v :: l)) [] extras)
 
 let vgpu_args_of_info info domid =
-	let path = sprintf "/var/lib/xen/demu-%s.%d" in
-	let suspend_file = path "save" domid in
-	let resume_file = path "resume" domid in
+	let suspend_file = sprintf demu_save_path domid in
+	let resume_file = sprintf demu_restore_path domid in
 	match info.vgpu with
 		| Some vgpu ->
 			[

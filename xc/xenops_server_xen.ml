@@ -1236,8 +1236,9 @@ module VM = struct
 					debug "This is a vgpu guest";
 					match Device.Vgpu.pid ~xs domid with
 					| None -> debug "No vgpu process running underneath";
-					| Some pid -> debug "Vgpu process suspended";
-					              Unix.kill pid Sys.sighup
+					| Some pid ->
+						debug "Vgpu process suspended";
+						Unix.kill pid Sys.sighup
 				end;
 
 				with_data ~xc ~xs task data true
