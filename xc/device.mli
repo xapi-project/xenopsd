@@ -104,6 +104,7 @@ end
 module Vgpu :
 sig
 	val pid : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> int option
+	val is_running : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> bool
 end
 
 module PV_Vnc :
