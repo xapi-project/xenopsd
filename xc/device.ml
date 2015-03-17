@@ -1832,6 +1832,8 @@ let vnconly_cmdline ~info ?(extras=[]) domid =
     @ (List.fold_left (fun l (k, v) -> ("-" ^ k) :: (match v with None -> l | Some v -> v :: l)) [] extras)
 
 let vgpu_args_of_info info domid =
+	let suspend_file = sprintf demu_save_path domid in
+	let resume_file = sprintf demu_restore_path domid in
 	match info.vgpu with
 		| Some vgpu ->
 			[
@@ -1839,7 +1841,11 @@ let vgpu_args_of_info info domid =
 				"--vcpus=" ^ (string_of_int info.vcpus);
 				"--gpu=" ^ vgpu.pci_id;
 				"--config=" ^ vgpu.config;
-			]
+				"--suspend=" ^ suspend_file;
+			] @
+			if Sys.file_exists resume_file
+			then ["--resume=" ^ resume_file]
+			else []
 		| None -> []
 
 let prepend_wrapper_args domid args =
