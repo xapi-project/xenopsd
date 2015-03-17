@@ -1843,8 +1843,10 @@ let vgpu_args_of_info info domid =
 				"--gpu=" ^ vgpu.pci_id;
 				"--config=" ^ vgpu.config;
 				"--suspend=" ^ suspend_file;
-				"--resume=" ^ resume_file;
-			]
+			] @
+			if Sys.file_exists resume_file
+			then ["--resume=" ^ resume_file]
+			else []
 		| None -> []
 
 let prepend_wrapper_args domid args =
