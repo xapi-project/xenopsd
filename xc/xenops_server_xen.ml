@@ -1262,6 +1262,11 @@ module VM = struct
 
 				let qemu_domid = Opt.default (this_domid ~xs) (get_stubdom ~xs domid) in
 
+				(* Suspend dvpgu *)
+				match Device.Vgpu.pid ~xs domid with
+				| None -> ()
+				| Some pid -> Unix.kill pid Sys.sighup;
+
 				with_data ~xc ~xs task data true
 					(fun fd ->
 						let vm_str = Vm.sexp_of_t vm |> Sexplib.Sexp.to_string in
