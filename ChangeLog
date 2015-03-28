@@ -1,3 +1,6 @@
+0.9.44.1 (28-Mar-2015):
+* add missing builddepend on oclock
+
 0.9.44 (22-Sep-2014):
 * better libxl support
 * improved robustness should the event thread throw an exception
