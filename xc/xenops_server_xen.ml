@@ -70,7 +70,7 @@ with rpc
 type attached_vdi = {
 	domid: int;
 	attach_info: Storage_interface.attach_info;
-}
+} with rpc
 
 module VmExtra = struct
 	(** Extra data we store per VM. The persistent data is preserved when
@@ -193,6 +193,10 @@ let domid_of_uuid ~xc ~xs domain_selection uuid =
 
 let get_uuid ~xc domid = uuid_of_di (Xenctrl.domain_getinfo xc domid)
 
+let device_kind_of_backend_keys backend_keys =
+	try Device_common.vbd_kind_of_string (List.assoc "backend-kind" backend_keys)
+	with Not_found -> Device_common.Vbd !Xenopsd.default_vbd_backend_kind
+
 let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
 	let frontend_vm_id = get_uuid ~xc frontend_domid |> Uuidm.to_string in
 	let backend_vm_id = get_uuid ~xc vdi.domid |> Uuidm.to_string in
@@ -204,6 +208,7 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
 			(* There's no need to use a PV disk if we're in the same domain *)
 			Name vdi.attach_info.Storage_interface.params
 		| Some backend_domid ->
+			let kind = device_kind_of_backend_keys vdi.attach_info.Storage_interface.xenstore_data in
 			let t = {
 				Device.Vbd.mode = Device.Vbd.ReadWrite;
 				device_number = None; (* we don't mind *)
@@ -212,6 +217,7 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
 				dev_type = Device.Vbd.Disk;
 				unpluggable = true;
 				protocol = None;
+				kind;
 				extra_backend_keys = List.map (fun (k, v) -> "sm-data/" ^ k, v) (vdi.attach_info.Storage_interface.xenstore_data);
 				extra_private_keys = [];
 				backend_domid = backend_domid;
@@ -1604,17 +1610,25 @@ module VBD = struct
 
 	let id_of vbd = snd vbd.id
 
-	let attach_and_activate task xc xs frontend_domid vbd = function
+	(* When we attach a VDI we remember the attach result so we can lookup
+	   details such as the device-kind later. *)
+
+	let vdi_attach_path vbd = Printf.sprintf "/xapi/%s/private/vdis/%s" (fst vbd.id) (snd vbd.id)
+
+	let attach_and_activate task xc xs frontend_domid vbd vdi =
+		let attached_vdi = match vdi with
 		| None ->
 			(* XXX: do something better with CDROMs *)
-			{ domid = this_domid ~xs; attach_info = { Storage_interface.params=""; xenstore_data=[]; } }
+			{ domid = this_domid ~xs; attach_info = { Storage_interface.params=""; o_direct=true; o_direct_reason=""; xenstore_data=[]; } }
 		| Some (Local path) ->
-			{ domid = this_domid ~xs; attach_info = { Storage_interface.params=path; xenstore_data=[]; } }
+			{ domid = this_domid ~xs; attach_info = { Storage_interface.params=path; o_direct=true; o_direct_reason=""; xenstore_data=[]; } }
 		| Some (VDI path) ->
 			let sr, vdi = Storage.get_disk_by_name task path in
 			let dp = Storage.id_of (string_of_int frontend_domid) vbd.id in
 			let vm = fst vbd.id in
-			Storage.attach_and_activate ~xc ~xs task vm dp sr vdi (vbd.mode = ReadWrite)
+			Storage.attach_and_activate ~xc ~xs task vm dp sr vdi (vbd.mode = ReadWrite) in
+		xs.Xs.write (vdi_attach_path vbd) (attached_vdi |> rpc_of_attached_vdi |> Jsonrpc.to_string);
+		attached_vdi
 
 	let frontend_domid_of_device device = device.Device_common.frontend.Device_common.domid
 
@@ -1646,7 +1660,22 @@ module VBD = struct
 			Storage.epoch_end task sr vdi
 		| _ -> ()		
 
-	let device_kind_of vbd = Device.Vbd.device_kind_of_backend_keys vbd.extra_backend_keys
+	let _backend_kind = "backend-kind"
+
+	let device_kind_of ~xs vbd =
+		(* If the user has provided an override then use that *)
+		if List.mem_assoc _backend_kind vbd.extra_backend_keys
+		then Device_common.kind_of_string (List.assoc _backend_kind vbd.extra_backend_keys)
+		else match (try Some(xs.Xs.read (vdi_attach_path vbd) |> Jsonrpc.of_string |> attached_vdi_of_rpc) with _ -> None) with
+		| None ->
+			(* An empty VBD has to be a CDROM: anything will do *)
+			Device_common.Vbd !Xenopsd.default_vbd_backend_kind
+		| Some vdi ->
+			let xenstore_data = vdi.attach_info.Storage_interface.xenstore_data in
+			(* Use the storage manager's preference *)
+			if List.mem_assoc _backend_kind xenstore_data
+			then Device_common.kind_of_string (List.assoc _backend_kind xenstore_data)
+			else Device_common.Vbd !Xenopsd.default_vbd_backend_kind
 
 	let vdi_path_of_device ~xs device = Device_common.backend_path_of_device ~xs device ^ "/vdi"
 
@@ -1668,10 +1697,10 @@ module VBD = struct
 						let k = "sm-data/" ^ k in
 						(k,v)::(List.remove_assoc k acc)) vbd.extra_backend_keys vdi.attach_info.Storage_interface.xenstore_data in
 
-					let device_kind = device_kind_of vbd in
+					let kind = device_kind_of ~xs vbd in
 
 					(* Remember the VBD id with the device *)
-					let vbd_id = _device_id device_kind, id_of vbd in
+					let vbd_id = _device_id kind, id_of vbd in
 					(* Remember the VDI with the device (for later deactivation) *)
 					let vdi_id = _vdi_id, vbd.backend |> rpc_of_backend |> Jsonrpc.to_string in
 					let dp_id = _dp_id, Storage.id_of (string_of_int frontend_domid) vbd.Vbd.id in
@@ -1690,6 +1719,7 @@ module VBD = struct
 						);
 						unpluggable = vbd.unpluggable;
 						protocol = None;
+						kind;
 						extra_backend_keys;
 						extra_private_keys = dp_id :: vdi_id :: vbd_id :: vbd.extra_private_keys;
 						backend_domid = vdi.domid;
@@ -1744,7 +1774,7 @@ module VBD = struct
 					   to free any storage resources. *)
 					let device =
 						try
-							Some (device_by_id xc xs vm (device_kind_of vbd) Oldest (id_of vbd))
+							Some (device_by_id xc xs vm (device_kind_of ~xs vbd) Oldest (id_of vbd))
 						with
 							| (Does_not_exist(_,_)) ->
 								debug "VM = %s; VBD = %s; Ignoring missing domain" vm (id_of vbd);
@@ -1799,7 +1829,7 @@ module VBD = struct
 				if not hvm
 				then plug task vm { vbd with backend = Some disk }
 				else begin
-					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of ~xs vbd) Newest (id_of vbd) in
 					let vdi = attach_and_activate task xc xs frontend_domid vbd (Some disk) in
 					let phystype = Device.Vbd.Phys in
 					(* We store away the disk so we can implement VBD.stat *)
@@ -1811,7 +1841,7 @@ module VBD = struct
 	let eject task vm vbd =
 		on_frontend
 			(fun xc xs frontend_domid hvm ->
-				let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Oldest (id_of vbd) in
+				let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of ~xs vbd) Oldest (id_of vbd) in
 				Device.Vbd.media_eject ~xs device;
 				safe_rm xs (vdi_path_of_device ~xs device);
 				Storage.dp_destroy task (Storage.id_of (string_of_int (frontend_domid_of_device device)) vbd.Vbd.id)
@@ -1829,7 +1859,7 @@ module VBD = struct
 				Opt.iter (function
 					| Ionice qos ->
 						try
-							let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
+							let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of ~xs vbd) Newest (id_of vbd) in
 							let path = Device_common.kthread_pid_path_of_device ~xs device in
 							let kthread_pid = xs.Xs.read path |> int_of_string in
 							ionice qos kthread_pid
@@ -1863,7 +1893,7 @@ module VBD = struct
 		with_xc_and_xs
 			(fun xc xs ->
 				try
-					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of ~xs vbd) Newest (id_of vbd) in
 					let qos_target = get_qos xc xs vm vbd device in
 
 					let backend_present =
@@ -1888,7 +1918,7 @@ module VBD = struct
 		with_xc_and_xs
 			(fun xc xs ->
 				try
-					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vbd) Newest (id_of vbd) in
+					let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of ~xs vbd) Newest (id_of vbd) in
 					if Hotplug.device_is_online ~xs device
 					then begin
 						let qos_target = get_qos xc xs vm vbd device in
