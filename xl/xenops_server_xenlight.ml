@@ -125,6 +125,7 @@ module Domain = struct
 		xsdata: (string * string) list;
 		platformdata: (string * string) list;
 		bios_strings: (string * string) list;
+		auto_update_drivers: bool;
 	} with rpc
 
 	type build_hvm_info = {
@@ -1721,6 +1722,7 @@ module VM = struct
 			xsdata = vm.xsdata;
 			platformdata = vm.platformdata @ vcpus;
 			bios_strings = vm.bios_strings;
+			auto_update_drivers = vm.auto_update_drivers;
 		} in
 		{
 			VmExtra.create_info = create_info;
