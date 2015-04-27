@@ -80,6 +80,7 @@ type atomic =
 	| VM_set_vcpus of (Vm.id * int)
 	| VM_set_shadow_multiplier of (Vm.id * float)
 	| VM_set_memory_dynamic_range of (Vm.id * int64 * int64)
+	| VM_set_auto_update_drivers of (Vm.id * bool)
 	| VM_pause of Vm.id
 	| VM_unpause of Vm.id
 	| VM_request_rdp of (Vm.id * bool)
@@ -1035,6 +1036,9 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 		| VM_set_domain_action_request (id, dar) ->
 			debug "VM.set_domain_action_request %s %s" id (Opt.default "None" (Opt.map (fun x -> x |> rpc_of_domain_action_request |> Jsonrpc.to_string) dar));
 			B.VM.set_domain_action_request (VM_DB.read_exn id) dar
+		| VM_set_auto_update_drivers (id, enabled) ->
+			debug "VM.set_auto_update_drivers %s %b" id enabled;
+			B.VM.set_auto_update_drivers (VM_DB.read_exn id) enabled
 		| VM_create_device_model (id, save_state) ->
 			debug "VM.create_device_model %s" id;
 			let vbds : Vbd.t list = VBD_DB.vbds id in
@@ -1183,6 +1187,7 @@ and trigger_cleanup_after_failure op t = match op with
 		| VM_set_vcpus (id, _)
 		| VM_set_shadow_multiplier (id, _)
 		| VM_set_memory_dynamic_range (id, _, _)
+		| VM_set_auto_update_drivers (id, _)
 		| VM_pause id
 		| VM_unpause id
 		| VM_request_rdp (id, _)
@@ -1747,6 +1752,8 @@ module VM = struct
 	let set_shadow_multiplier _ dbg id n = queue_operation dbg id (Atomic(VM_set_shadow_multiplier (id, n)))
 
 	let set_memory_dynamic_range _ dbg id min max = queue_operation dbg id (Atomic(VM_set_memory_dynamic_range (id, min, max)))
+
+	let set_auto_update_drivers _ dbg id enabled = queue_operation dbg id (Atomic(VM_set_auto_update_drivers (id, enabled)))
 
 	let delay _ dbg id t = queue_operation dbg id (Atomic(VM_delay(id, t)))
 

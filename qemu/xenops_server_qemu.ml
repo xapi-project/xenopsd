@@ -362,6 +362,7 @@ module VM = struct
 			let path = Filename.concat Qemu.qmp_dir vm.Vm.id in
 			if Sys.file_exists path then None else Some Needs_poweroff
 		end else None
+	let set_domain_action_request vm enabled = ()
 	let minimum_reboot_delay = 0.
 end
 

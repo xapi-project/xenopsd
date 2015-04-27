@@ -423,6 +423,7 @@ module VM = struct
 		| Some { D.state = D.InfoShutdown } -> Some Needs_poweroff
 		| Some { D.state = D.InfoShutoff } -> Some Needs_poweroff
 		| _ -> None
+	let set_domain_action_request vm enabled = ()
 	let minimum_reboot_delay = 0.
 end
 

@@ -357,6 +357,8 @@ module VM = struct
 	let set_internal_state vm s =
 		DB.write vm.Vm.id (s |> Jsonrpc.of_string |> Domain.t_of_rpc)
 
+	let set_auto_update_drivers vm enabled = ()
+
 	let minimum_reboot_delay = 0.
 end
 

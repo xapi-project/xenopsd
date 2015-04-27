@@ -1456,6 +1456,17 @@ module VM = struct
 						)
 			)
 
+	let set_auto_update_drivers vm enabled =
+		let uuid = uuid_of_vm vm in
+		with_xc_and_xs
+			(fun xc xs ->
+				match di_of_uuid ~xc ~xs Newest uuid with
+					| None -> raise (Does_not_exist("domain", vm.Vm.id))
+					| Some di ->
+						let path = Printf.sprintf "/local/domain/%d/control/auto-update-drivers" di.Xenctrl.domid in
+						xs.Xs.write path (if enabled then "1" else "0")
+			)
+
 	let get_domain_action_request vm =
 		let uuid = uuid_of_vm vm in
 		with_xc_and_xs
