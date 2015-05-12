@@ -117,7 +117,9 @@ type attached_vdi = {
 	attach_info: Storage_interface.attach_info;
 } with rpc
 
-(* The following module contains left-overs from the "classic" domain.ml *)
+(* The following module contains left-overs from the "classic" domain.ml 
+   Note: "auto_update_drivers" parameter won't do anything for the libxl backend
+	(i.e. the xenstore key won't be written) *)
 module Domain = struct
 	type create_info = {
 		ssidref: int32;
