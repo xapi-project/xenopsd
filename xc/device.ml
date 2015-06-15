@@ -1821,6 +1821,14 @@ let start_vnconly (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
 
 (* suspend/resume is a done by sending signals to qemu *)
 let suspend (task: Xenops_task.t) ~xs ~qemu_domid domid =
+	let suspend_vgpu () = match Vgpu.pid ~xs domid with
+	| None -> debug "vgpu: no process running"
+	| Some vgpu_pid -> begin
+		let tag = Printf.sprintf "(domid = %d pid = %d)" domid vgpu_pid in
+		debug "vgpu: suspending vgpu with SIGHUP %s" tag;
+		Unix.kill vgpu_pid Sys.sighup
+	end in
+	suspend_vgpu ();
 	signal task ~xs ~qemu_domid ~domid "save" ~wait_for:"paused"
 let resume (task: Xenops_task.t) ~xs ~qemu_domid domid =
 	signal task ~xs ~qemu_domid ~domid "continue" ~wait_for:"running"

@@ -153,7 +153,7 @@ val restore: Xenops_task.Xenops_task.t -> xc: Xenctrl.handle -> xs: Xenstore.Xs.
 type suspend_flag = Live | Debug
 
 (** suspend a domain into the file descriptor *)
-val suspend: Xenops_task.Xenops_task.t -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> hvm: bool -> vgpu: bool -> string -> string -> domid
+val suspend: Xenops_task.Xenops_task.t -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> hvm: bool -> string -> string -> domid
           -> Unix.file_descr -> suspend_flag list
           -> ?progress_callback: (float -> unit)
 		  -> qemu_domid: int

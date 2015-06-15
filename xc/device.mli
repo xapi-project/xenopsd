@@ -101,12 +101,6 @@ sig
 	val status : xs:Xenstore.Xs.xsh -> devid:int -> int -> bool
 end
 
-module Vgpu :
-sig
-	val pid : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> int option
-	val is_running : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> bool
-end
-
 module PV_Vnc :
 sig
 	exception Failed_to_start

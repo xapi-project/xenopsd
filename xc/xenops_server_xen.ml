@@ -1261,23 +1261,11 @@ module VM = struct
 				let domid = di.Xenctrl.domid in
 
 				let qemu_domid = Opt.default (this_domid ~xs) (get_stubdom ~xs domid) in
-				let vgpu_guest = Device.Vgpu.is_running ~xs domid in
-
-				(* Suspend dvpgu *)
-				if vgpu_guest then
-				begin
-					debug "This is a vgpu guest";
-					match Device.Vgpu.pid ~xs domid with
-					| None -> debug "No vgpu process running underneath";
-					| Some pid ->
-						debug "Vgpu process suspended";
-						Unix.kill pid Sys.sighup
-				end;
 
 				with_data ~xc ~xs task data true
 					(fun fd ->
 						let vm_str = Vm.sexp_of_t vm |> Sexplib.Sexp.to_string in
-						Domain.suspend task ~xc ~xs ~hvm ~vgpu:vgpu_guest ~progress_callback ~qemu_domid (choose_xenguest vm.Vm.platformdata) vm_str domid fd flags'
+						Domain.suspend task ~xc ~xs ~hvm ~progress_callback ~qemu_domid (choose_xenguest vm.Vm.platformdata) vm_str domid fd flags'
 							(fun () ->
 								if not(request_shutdown task vm Suspend 30.)
 								then raise (Failed_to_acknowledge_shutdown_request);

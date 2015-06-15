@@ -1137,7 +1137,7 @@ let write_demu_record domid uuid fd =
  * and is in charge to suspend the domain when called. the whole domain
  * context is saved to fd
  *)
-let suspend (task: Xenops_task.t) ~xc ~xs ~hvm ~vgpu xenguest_path vm_str domid fd flags ?(progress_callback = fun _ -> ()) ~qemu_domid do_suspend_callback =
+let suspend (task: Xenops_task.t) ~xc ~xs ~hvm xenguest_path vm_str domid fd flags ?(progress_callback = fun _ -> ()) ~qemu_domid do_suspend_callback =
 	let module DD = Debug.Make(struct let name = "mig64" end) in
 	let open DD in
 	let uuid = get_uuid ~xc domid in
@@ -1173,6 +1173,7 @@ let suspend (task: Xenops_task.t) ~xc ~xs ~hvm ~vgpu xenguest_path vm_str domid 
 		* suspend-image-writing *)
 		(if hvm then write_qemu_record domid uuid legacy_libxc fd else return ()) >>= fun () ->
 		debug "Qemu record written";
+		let vgpu = Sys.file_exists (sprintf demu_save_path domid) in
 		(if vgpu then write_demu_record domid uuid fd else return ()) >>= fun () ->
 		debug "Writing End_of_image footer";
 		write_header fd (End_of_image, 0L)
