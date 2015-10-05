@@ -3,4 +3,9 @@ install: wget https://raw.githubusercontent.com/ocaml/ocaml-travisci-skeleton/ma
 script: bash -ex .travis-opam.sh
 sudo: true
 env:
-        - OCAML_VERSION=4.01 PACKAGE=xapi-xenopsd FORK_USER=xapi-project EXTRA_REMOTES=git://github.com/xapi-project/opam-repo-dev
+  global:
+        - OCAML_VERSION=4.01
+        - PACKAGE=xapi-xenopsd
+        - FORK_USER=xapi-project
+        - EXTRA_REMOTES=git://github.com/xapi-project/opam-repo-dev
+        - PINS="xapi-idl:git://github.com/xapi-project/xcp-idl#trunk-level"
