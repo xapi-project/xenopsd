@@ -83,6 +83,7 @@ type atomic =
 	| VM_pause of Vm.id
 	| VM_unpause of Vm.id
 	| VM_request_rdp of (Vm.id * bool)
+	| VM_run_script of (Vm.id * string)
 	| VM_set_domain_action_request of (Vm.id * domain_action_request option)
 	| VM_create_device_model of (Vm.id * bool)
 	| VM_destroy_device_model of Vm.id
@@ -934,7 +935,7 @@ let rec atomics_of_operation = function
 		]
 	| _ -> []
 
-let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) : unit =
+let perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xenops_task.t) : unit =
 	let module B = (val get_backend () : S) in
 	Xenops_task.check_cancelling t;
 	match op with
@@ -1080,6 +1081,11 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 		| VM_request_rdp (id, enabled) ->
 			debug "VM.request_rdp %s %b" id enabled;
 			B.VM.request_rdp (VM_DB.read_exn id) enabled
+		| VM_run_script (id, script) ->
+			debug "VM.run_script %s %s" id script;
+			let res = B.VM.run_script t (VM_DB.read_exn id) script in
+			VM_DB.signal id;
+			(match result with None -> () | Some r -> r := Some res)
 		| VM_set_domain_action_request (id, dar) ->
 			debug "VM.set_domain_action_request %s %s" id (Opt.default "None" (Opt.map (fun x -> x |> rpc_of_domain_action_request |> Jsonrpc.to_string) dar));
 			B.VM.set_domain_action_request (VM_DB.read_exn id) dar
@@ -1105,7 +1111,12 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 			let vbds : Vbd.t list = VBD_DB.vbds id |> vbd_plug_order in
 			let vifs : Vif.t list = VIF_DB.vifs id |> vif_plug_order in
 			let vgpus : Vgpu.t list = VGPU_DB.vgpus id |> vgpu_plug_order in
-			B.VM.build t (VM_DB.read_exn id) vbds vifs vgpus
+			let extras : string list = match PCI_DB.pcis id |> pci_plug_order with
+			| [] -> []
+			| pcis  ->
+				 let sbdfs = List.map (fun p -> Pci.string_of_address p.Pci.address) pcis in
+				 [ "-pci_passthrough"; String.concat "," sbdfs] in
+			B.VM.build t (VM_DB.read_exn id) vbds vifs vgpus extras
 		| VM_shutdown_domain (id, reason, timeout) ->
 			let start = Unix.gettimeofday () in
 			let vm = VM_DB.read_exn id in
@@ -1133,7 +1144,12 @@ let perform_atomic ~progress_callback ?subtask (op: atomic) (t: Xenops_task.t) :
 			then failwith (Printf.sprintf "%s doesn't exist" id);
 			let vbds : Vbd.t list = VBD_DB.vbds id in
 			let vifs : Vif.t list = VIF_DB.vifs id in
-			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data
+			let extras : string list = match PCI_DB.pcis id with
+			| [] -> []
+			| pcis  ->
+				 let sbdfs = List.map (fun p -> Pci.string_of_address p.Pci.address) pcis in
+				 [ "-pci_passthrough"; String.concat "," sbdfs] in
+			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data extras
 		| VM_delay (id, t) ->
 			debug "VM %s: waiting for %.2f before next VM action" id t;
 			Thread.delay t
@@ -1239,6 +1255,7 @@ and trigger_cleanup_after_failure op t = match op with
 		| VM_pause id
 		| VM_unpause id
 		| VM_request_rdp (id, _)
+		| VM_run_script (id, _)
 		| VM_set_domain_action_request (id, _)
 		| VM_create_device_model (id, _)
 		| VM_destroy_device_model id
@@ -1254,7 +1271,7 @@ and trigger_cleanup_after_failure op t = match op with
 			immediate_operation t.Xenops_task.dbg id (VM_check_state id)
 	end
 
-and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
+and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 	let module B = (val get_backend () : S) in
 	let one = function
 		| VM_start id ->
@@ -1505,7 +1522,7 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 			List.iter (fun x -> perform x t) operations
 		| Atomic op ->
 			let progress_callback = progress_callback 0. 1. t in
-			perform_atomic ~progress_callback ?subtask op t
+			perform_atomic ~progress_callback ?subtask ?result op t
 	in
 	let one op =
 		try
@@ -1526,7 +1543,7 @@ and perform ?subtask (op: operation) (t: Xenops_task.t) : unit =
 		| Some name -> Xenops_task.with_subtask t name (fun () -> one op)
 
 let queue_operation_int dbg id op =
-	let task = Xenops_task.add tasks dbg (fun t -> perform op t; None) in
+	let task = Xenops_task.add tasks dbg (let r = ref None in fun t -> perform ~result:r op t; !r) in
 	Redirector.push id (op, task);
 	task
 
@@ -1850,6 +1867,8 @@ module VM = struct
 	let unpause _ dbg id = queue_operation dbg id (Atomic(VM_unpause id))
 
 	let request_rdp _ dbg id enabled = queue_operation dbg id (Atomic(VM_request_rdp (id, enabled)))
+
+	let run_script _ dbg id script = queue_operation dbg id (Atomic(VM_run_script (id, script)))
 
 	let set_xsdata _ dbg id xsdata = queue_operation dbg id (Atomic (VM_set_xsdata (id, xsdata)))
 

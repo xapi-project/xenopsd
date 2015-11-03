@@ -1953,7 +1953,7 @@ module VM = struct
 	) Newest task vm
 
 	(*let create task memory_upper_bound vm vbds =*)
-	let build ?restore_fd task vm vbds vifs vgpus =
+	let build ?restore_fd task vm vbds vifs vgpus extras =
 		let memory_upper_bound = None in
 		let k = vm.Vm.id in
 
@@ -2449,7 +2449,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data =
+	let restore task progress_callback vm vbds vifs data extras =
 		with_xs (fun xs ->
 			with_data ~xs task data false (fun fd ->
 				let vbds = List.filter (fun vbd -> vbd.Vbd.mode = Vbd.ReadOnly) vbds in
@@ -2459,7 +2459,7 @@ module VM = struct
 					error "VM = %s; read invalid save file signature: \"%s\"" vm.Vm.id read_signature;
 					raise Restore_signature_mismatch
 				end;
-				build ~restore_fd:fd task vm vbds vifs []
+				build ~restore_fd:fd task vm vbds vifs [] extras
 			)
 		)
 
@@ -2519,7 +2519,7 @@ module VM = struct
 						let rtc = try xs.Xs.read (Printf.sprintf "/vm/%s/rtc/timeoffset" (Uuidm.to_string uuid)) with Xs_protocol.Enoent _ -> "" in
 						let rec ls_lR root dir =
 							let this = try [ dir, xs.Xs.read (root ^ "/" ^ dir) ] with _ -> [] in
-							let subdirs = try List.map (fun x -> dir ^ "/" ^ x) (xs.Xs.directory (root ^ "/" ^ dir)) with _ -> [] in
+							let subdirs = try xs.Xs.directory (root ^ "/" ^ dir) |> List.filter (fun x -> x <> "") |> List.map (fun x -> dir ^ "/" ^ x) with _ -> [] in
 							this @ (List.concat (List.map (ls_lR root) subdirs)) in
 						let guest_agent =
 							[ "drivers"; "attr"; "data"; "control"; "device" ] |> List.map (ls_lR (Printf.sprintf "/local/domain/%d" di.domid)) |> List.concat in

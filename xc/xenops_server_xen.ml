@@ -20,6 +20,7 @@ open Xenops_helpers
 open Xenstore
 open Xenops_utils
 open Xenops_task
+open Cancel_utils
 
 module D = Debug.Make(struct let name = service_name end)
 open D
@@ -1116,7 +1117,7 @@ module VM = struct
                 with No_reservation ->
                         error "Please check if memory reservation for domain %d is present, if so manually remove it" domid
 
-	let build_domain_exn xc xs domid task vm vbds vifs vgpus =
+	let build_domain_exn xc xs domid task vm vbds vifs vgpus extras =
 		let open Memory in
 		let initial_target = get_initial_target ~xs domid in
 		let make_build_info kernel priv = {
@@ -1159,7 +1160,7 @@ module VM = struct
 								} in
 								((make_build_info b.Bootloader.kernel_path builder_spec_info), "")
 							) in
-			let arch = Domain.build task ~xc ~xs ~store_domid ~console_domid build_info timeoffset (choose_xenguest vm.Vm.platformdata) domid in
+			let arch = Domain.build task ~xc ~xs ~store_domid ~console_domid ~timeoffset ~extras build_info (choose_xenguest vm.Vm.platformdata) domid in
 			Int64.(
 				let min = to_int (div vm.Vm.memory_dynamic_min 1024L)
 				and max = to_int (div vm.Vm.memory_dynamic_max 1024L) in
@@ -1180,12 +1181,12 @@ module VM = struct
 		) (fun () -> Opt.iter Bootloader.delete !kernel_to_cleanup)
 
 
-	let build_domain vm vbds vifs vgpus xc xs task _ di =
+	let build_domain vm vbds vifs vgpus extras xc xs task _ di =
 		let domid = di.Xenctrl.domid in
                 finally
                     (fun () ->
                             try
-                                    build_domain_exn xc xs domid task vm vbds vifs vgpus;
+                                    build_domain_exn xc xs domid task vm vbds vifs vgpus extras;
                             with
                                     | Bootloader.Bad_sexpr x ->
                                             let m = Printf.sprintf "VM = %s; domid = %d; Bootloader.Bad_sexpr %s" vm.Vm.id domid x in
@@ -1212,7 +1213,7 @@ module VM = struct
                                             raise e
                     ) (fun () -> clean_memory_reservation task di.Xenctrl.domid)
 
-	let build ?restore_fd task vm vbds vifs vgpus = on_domain (build_domain vm vbds vifs vgpus) Newest task vm
+	let build ?restore_fd task vm vbds vifs vgpus extras = on_domain (build_domain vm vbds vifs vgpus extras) Newest task vm
 
 	let create_device_model_exn vbds vifs vgpus saved_state xc xs task vm di =
 		let vmextra = DB.read_exn vm.Vm.id in
@@ -1400,7 +1401,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data =
+	let restore task progress_callback vm vbds vifs data extras =
 		on_domain
 			(fun xc xs task vm di ->
                             finally
@@ -1425,7 +1426,7 @@ module VM = struct
 
 				        		with_data ~xc ~xs task data false
 				        			(fun fd ->
-				        				Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) build_info timeoffset (choose_xenguest vm.Vm.platformdata) domid fd
+				        				Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) ~timeoffset ~extras build_info (choose_xenguest vm.Vm.platformdata) domid fd
 				        			);
 				        	with e ->
 				        		error "VM %s: restore failed: %s" vm.Vm.id (Printexc.to_string e);
@@ -1503,7 +1504,7 @@ module VM = struct
 						let rtc = try xs.Xs.read (Printf.sprintf "/vm/%s/rtc/timeoffset" (Uuidm.to_string uuid)) with Xs_protocol.Enoent _ -> "" in
 						let rec ls_lR root dir =
 							let this = try [ dir, xs.Xs.read (root ^ "/" ^ dir) ] with _ -> [] in
-							let subdirs = try List.map (fun x -> dir ^ "/" ^ x) (xs.Xs.directory (root ^ "/" ^ dir)) with _ -> [] in
+							let subdirs = try xs.Xs.directory (root ^ "/" ^ dir) |> List.filter (fun x -> x <> "") |> List.map (fun x -> dir ^ "/" ^ x) with _ -> [] in
 							this @ (List.concat (List.map (ls_lR root) subdirs)) in
 						let guest_agent =
 							[ "drivers"; "attr"; "data"; "control"; "device" ] |> List.map (ls_lR (Printf.sprintf "/local/domain/%d" di.Xenctrl.domid)) |> List.concat |> List.map (fun (k,v) -> (k,Xenops_utils.utf8_recode v)) in
@@ -1563,6 +1564,56 @@ module VM = struct
 						let path = Printf.sprintf "/local/domain/%d/control/ts" di.Xenctrl.domid in
 						xs.Xs.write path (if enabled then "1" else "0")
 			)
+
+	let run_script task vm script =
+		let uuid = uuid_of_vm vm in
+		let domid, path =  with_xc_and_xs
+			(fun xc xs ->
+				match di_of_uuid ~xc ~xs Newest uuid with
+				| None -> raise (Does_not_exist("domain", vm.Vm.id))
+				| Some di ->
+					let path = xs.Xs.getdomainpath di.Xenctrl.domid in
+					let _ =
+						try xs.Xs.read (path ^ "/control/feature-xs-batcmd")
+						with _ -> raise (Unimplemented "run-script is not supported on the given VM (or it is still booting)") in
+					di.Xenctrl.domid, path ^ "/control/batcmd") in
+		let () = Xs.transaction ()
+			(fun xs ->
+				let state = try xs.Xs.read (path ^ "/state") with _ -> "" in
+				let () = match state with
+				| "" -> () (* state should normally be empty, unless in exceptional case e.g. xapi restarted previously *)
+				| "IN PROGRESS" ->
+					raise (Failed_to_run_script "A residual run-script instance in progress, either wait for its completion or reboot the VM.")
+				| _ ->
+					info "Found previous run_script state %s leftover (either not started or completed), remove." state;
+					xs.Xs.rm path in
+				xs.Xs.write (path ^ "/script") script;
+				xs.Xs.write (path ^ "/state") "READY") in
+		let watch_succ = List.map
+			(fun s -> Watch.map (fun _ -> ()) (Watch.value_to_become (path ^ "/state") s))
+			[ "SUCCESS"; "TRUNCATED"; "FAILURE"] in
+		let watch_fail = [Watch.key_to_disappear path] in
+		let succ, flag, rc, stdout, stderr = Xs.with_xs (fun xs ->
+			let succ = cancellable_watch (Domain domid) watch_succ watch_fail task ~xs ~timeout:86400. () in
+			let flag = try xs.Xs.read (path ^ "/state") with _ -> "" in
+			let rc = try xs.Xs.read (path ^ "/return") with _ -> "" in
+			let stdout =  try xs.Xs.read (path ^ "/stdout") with _ -> "" in
+			let stderr = try xs.Xs.read (path ^ "/stderr") with _ -> "" in
+			xs.Xs.rm path;
+			succ, flag, rc, stdout, stderr) in
+		if not succ then Xenops_task.raise_cancelled task;
+		let truncate s =
+			let mark = " (truncated)" in
+			let len = String.length s in
+			if len >= 1024 || flag = "TRUNCATED" && len > 1024 - String.length mark
+			then String.sub s 0 (1024 - String.length mark) ^ mark else s in
+		let stdout, stderr = truncate stdout, truncate stderr in
+		let rc_opt = try Some (Int64.of_string rc) with _ -> None in
+		match flag, rc_opt with
+		| ("SUCCESS" | "TRUNCATED"), Some rc_int  ->
+			Rpc.Dict [("rc", Rpc.Int rc_int); ("stdout", Rpc.String stdout); ("stderr", Rpc.String stderr)]
+		| _, _ ->
+			raise (Failed_to_run_script (Printf.sprintf "flag = %s, rc = %s, stdour = %s, stderr = %s" flag rc stdout stderr))
 
 	let set_domain_action_request vm request =
 		let uuid = uuid_of_vm vm in
