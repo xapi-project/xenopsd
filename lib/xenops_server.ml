@@ -1339,14 +1339,14 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 			debug "Received id = %s" id;
 			let memory_url = Uri.make ?scheme:(Uri.scheme url) ?host:(Uri.host url) ?port:(Uri.port url)
 				~path:(Uri.path url ^ "/memory/" ^ id) ~query:(Uri.query url) () in
-
-			(* CA-78365: set the memory dynamic range to a single value to stop ballooning. *)
-			let atomic = VM_set_memory_dynamic_range(id, vm.Vm.memory_dynamic_min, vm.Vm.memory_dynamic_min) in
-			let (_: unit) = perform_atomic ~subtask:(string_of_atomic atomic) ~progress_callback:(fun _ -> ()) atomic t in
-
+			
 			(* Find out the VM's current memory_limit: this will be used to allocate memory on the receiver *)
 			let state = B.VM.get_state vm in
-			info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit;
+			info "VM %s has memory_limit = %Ld and memory_actual = %Ld" id state.Vm.memory_limit state.Vm.memory_actual;
+
+			(* CA-78365: set the memory dynamic range to a single value to stop ballooning. *)
+			let atomic = VM_set_memory_dynamic_range(id, state.Vm.memory_actual, state.Vm.memory_actual) in
+			let (_: unit) = perform_atomic ~subtask:(string_of_atomic atomic) ~progress_callback:(fun _ -> ()) atomic t in
 
 			Open_uri.with_open_uri memory_url
 				(fun mfd ->
