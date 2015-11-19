@@ -38,7 +38,11 @@ end
 
 let watch ~xs path =
 	debug "xenstore watch %s" path;
-	xs.Xs.watch path path
+	try
+		xs.Xs.watch path path
+	with _ ->
+		debug "xenstore watch %s failed" path
+	
 
 let unwatch ~xs path =
 	try
