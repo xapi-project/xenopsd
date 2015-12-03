@@ -1410,7 +1410,7 @@ type usb_opt =
 type disp_intf_opt =
     | Std_vga
     | Cirrus
-    | Vgpu of Xenops_interface.Vgpu.t list
+    | Vgpu of (Xenops_interface.Vgpu.t * string option) list
     | GVT_d
 
 (* Display output / keyboard input *)
@@ -1524,8 +1524,8 @@ let cmdline_of_disp info =
 	let vga_type_opts x =
 		let open Xenops_interface.Vgpu in
 		match x with
-		| Vgpu [{implementation = Nvidia _}] -> ["-vgpu"]
-		| Vgpu [{implementation = GVT_g gvt_g}] ->
+		| Vgpu [{implementation = Nvidia _}, _] -> ["-vgpu"]
+		| Vgpu [{implementation = GVT_g gvt_g}, _] ->
 			[
 				"-xengt";
 				"-vgt_low_gm_sz"; Int64.to_string gvt_g.low_gm_sz;
@@ -1617,15 +1617,19 @@ let vnconly_cmdline ~info ?(extras=[]) domid =
     @ disp_options
     @ (List.fold_left (fun l (k, v) -> ("-" ^ k) :: (match v with None -> l | Some v -> v :: l)) [] extras)
 
-let vgpu_args_of_nvidia domid vcpus vgpu =
+let vgpu_args_of_nvidia domid vcpus vgpu extra_args =
 	let suspend_file = sprintf demu_save_path domid in
 	let resume_file = sprintf demu_restore_path domid in
 	let open Xenops_interface.Vgpu in
+	let config = match extra_args with
+	| Some args -> Printf.sprintf "%s,%s" vgpu.config_file args
+	| None -> vgpu.config_file
+	in
 	[
 		"--domain=" ^ (string_of_int domid);
 		"--vcpus=" ^ (string_of_int vcpus);
 		"--gpu=" ^ (Xenops_interface.Pci.string_of_address vgpu.physical_pci_address);
-		"--config=" ^ vgpu.config_file;
+		"--config=" ^ config;
 		"--suspend=" ^ suspend_file;
 	] @
 	if Sys.file_exists resume_file
@@ -1682,21 +1686,21 @@ let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready
 	(* start vgpu emulation if appropriate *)
 	let open Xenops_interface.Vgpu in
 	let () = match info.disp with
-	| VNC (Vgpu [{implementation = Nvidia vgpu}], _, _, _, _)
-	| SDL (Vgpu [{implementation = Nvidia vgpu}], _) -> begin
+	| VNC (Vgpu [{implementation = Nvidia vgpu}, extra_args], _, _, _, _)
+	| SDL (Vgpu [{implementation = Nvidia vgpu}, extra_args], _) -> begin
 		(* The below line does nothing if the device is already bound to the
 		 * nvidia driver. We rely on xapi to refrain from attempting to run
 		 * a vGPU on a device which is passed through to a guest. *)
 		PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
-		let args = vgpu_args_of_nvidia domid info.vcpus vgpu in
+		let args = vgpu_args_of_nvidia domid info.vcpus vgpu extra_args in
 		let ready_path = Printf.sprintf "/local/domain/%d/vgpu-pid" domid in
 		let cancel = Cancel_utils.Vgpu domid in
 		let vgpu_pid = init_daemon ~task ~path:!Xc_path.vgpu ~args
 			~name:"vgpu" ~domid ~xs ~ready_path ~timeout:!Xenopsd.vgpu_ready_timeout ~cancel () in
 		Forkhelpers.dontwaitpid vgpu_pid
 	end
-	| VNC (Vgpu [{implementation = GVT_g vgpu}], _, _, _, _)
-	| SDL (Vgpu [{implementation = GVT_g vgpu}], _) ->
+	| VNC (Vgpu [{implementation = GVT_g vgpu}, _], _, _, _, _)
+	| SDL (Vgpu [{implementation = GVT_g vgpu}, _], _) ->
 		PCI.bind [vgpu.physical_pci_address] PCI.I915
 	| VNC (Vgpu _, _, _, _, _)
 	| SDL (Vgpu _, _) -> failwith "Unsupported vGPU configuration"

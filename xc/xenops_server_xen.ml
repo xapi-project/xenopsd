@@ -945,12 +945,17 @@ module VM = struct
 					?(parallel=None)
 					?(acpi=true) ?(video=Cirrus) ?(keymap="en-us")
 					?vnc_ip ?(pci_passthrough=false) ?(hvm=true) ?(video_mib=4) () =
+				let vgpu_extra_args =
+					try Some (List.assoc Keys.vgpu_extra_args vm.Vm.platformdata)
+					with Not_found -> None
+				in
 				let video = match video, vgpus with
 					| Cirrus, [] -> Device.Dm.Cirrus
 					| Standard_VGA, [] -> Device.Dm.Std_vga
 					| IGD_passthrough GVT_d, [] -> Device.Dm.GVT_d
 					| Vgpu, [] -> raise (Internal_error "Vgpu mode specified but no vGPUs")
-					| Vgpu, vgpus -> Device.Dm.Vgpu vgpus
+					| Vgpu, vgpus ->
+						Device.Dm.Vgpu (List.map (fun vgpu -> vgpu, vgpu_extra_args) vgpus)
 					| _ -> raise (Internal_error "Invalid graphics mode")
 				in
 				let open Device.Dm in {

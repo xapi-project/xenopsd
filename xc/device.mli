@@ -173,7 +173,7 @@ sig
 	type disp_intf_opt =
 		| Std_vga
 		| Cirrus
-		| Vgpu of Xenops_interface.Vgpu.t list
+		| Vgpu of (Xenops_interface.Vgpu.t * string option) list
 		| GVT_d
 
 	type disp_opt =
