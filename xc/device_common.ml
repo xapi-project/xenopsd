@@ -160,6 +160,9 @@ let get_private_path_by_uuid uuid =
 let get_private_data_path_of_device (x: device) =
 	sprintf "%s/private/%s/%d" (get_private_path x.frontend.domid) (string_of_kind x.backend.kind) x.backend.devid
 
+let string_uuid_of_domid domid =
+	sprintf "%s" (uuid_of_domid domid)	
+
 let device_of_backend (backend: endpoint) (domu: Xenctrl.domid) = 
   let frontend = { domid = domu;
 		   kind = (match backend.kind with

@@ -455,8 +455,13 @@ let device_by_id xc xs vm kind domain_selection id =
 			debug "VM = %s; does not exist in domain list" vm;
 			raise (Does_not_exist("domain", vm))
 		| Some frontend_domid ->
-			let devices = Device_common.list_frontends ~xs frontend_domid in
+			(* Ensure that the frontend belongs to the same vm to counter a misbehaving guest *)
+			if (Device_common.string_uuid_of_domid frontend_domid) <> vm then begin
+				let err = Printf.sprintf "xenstore frontend-backend mismatch for vm = %s" vm in
+				raise (Internal_error err)
+			end;
 
+			let devices = Device_common.list_frontends ~xs frontend_domid in
 			let key = _device_id kind in
 			let id_of_device device =
 				let path = Device_common.get_private_data_path_of_device device in
