@@ -60,6 +60,8 @@ val string_of_device : device -> string
 val string_of_kind : kind -> string
 val kind_of_string : string -> kind
 
+val string_uuid_of_domid : Xenctrl.domid -> string
+
 (** [list_backends xs domid] returns a list of devices where there is a
 	backend in [domid]. This function only reads data stored in the backend
     directory.*)
