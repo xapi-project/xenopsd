@@ -196,22 +196,24 @@ let make ~xc ~xs vm_info uuid =
 		let vss_path = "/vss/" ^ (Uuid.to_string uuid) in
 		let roperm = Xenbus_utils.roperm_for_guest domid in
 		let rwperm = Xenbus_utils.rwperm_for_guest domid in
-		debug "VM = %s; creating xenstored tree: %s" (Uuid.to_string uuid) dom_path;
 
+		let mkdir ?(delete_first=false) perms t path =
+			let open Xenbus_utils in
+			if delete_first then t.Xst.rm path;
+			t.Xst.mkdir path;
+			t.Xst.setperms path (match perms with `RO -> roperm | `RW -> rwperm) in
+
+		debug "VM = %s; creating xenstored tree: %s" (Uuid.to_string uuid) dom_path;
 		let create_time = Oclock.gettime Oclock.monotonic in
 		Xs.transaction xs (fun t ->
-			(* Clear any existing rubbish in xenstored *)
-			t.Xst.rm dom_path;
-			t.Xst.mkdir dom_path;
-			t.Xst.setperms dom_path roperm;
+			mkdir ~delete_first:true `RO t dom_path;
 
 			(* The /vm path needs to be shared over a localhost migrate *)
 			let vm_exists = try ignore(t.Xst.read vm_path); true with _ -> false in
 			if vm_exists then
 				xenstore_iter t (fun d -> t.Xst.setperms d roperm) vm_path
 			else begin
-				t.Xst.mkdir vm_path;
-				t.Xst.setperms vm_path roperm;
+				mkdir `RO t vm_path;
 				t.Xst.writev vm_path [
 					"uuid", (Uuid.to_string uuid);
 					"name", name;
@@ -220,9 +222,7 @@ let make ~xc ~xs vm_info uuid =
 			t.Xst.write (Printf.sprintf "%s/domains/%d" vm_path domid) dom_path;
 			t.Xst.write (Printf.sprintf "%s/domains/%d/create-time" vm_path domid) (Int64.to_string create_time);
 
-			t.Xst.rm vss_path;
-			t.Xst.mkdir vss_path;
-			t.Xst.setperms vss_path rwperm;
+			mkdir ~delete_first:true `RW t vss_path;
 
 			t.Xst.write (dom_path ^ "/vm") vm_path;
 			t.Xst.write (dom_path ^ "/vss") vss_path;
@@ -230,19 +230,17 @@ let make ~xc ~xs vm_info uuid =
 
 			(* create cpu and memory directory with read only perms *)
 			List.iter (fun dir ->
-				let ent = sprintf "%s/%s" dom_path dir in
-				t.Xst.mkdir ent;
-				t.Xst.setperms ent roperm
+				mkdir `RO t (sprintf "%s/%s" dom_path dir)
 			) [ "cpu"; "memory" ];
 			(* create read/write nodes for the guest to use *)
 			List.iter (fun dir ->
-				let ent = sprintf "%s/%s" dom_path dir in
-				t.Xst.mkdir ent;
-				t.Xst.setperms ent rwperm
+				mkdir `RW t (sprintf "%s/%s" dom_path dir);
 			) (
-				let dev_kinds = [ "vbd"; "vif"; "vfb"; "vkb"; "vfs"; "pci" ] in
 				[ "device"; "error"; "drivers"; "control"; "attr"; "data"; "messages"; "vm-data"; "hvmloader"; "rrd" ]
-				@ List.map (fun dev_kind -> "device/"^dev_kind) dev_kinds
+				@ if vm_info.hvm then
+					let dev_kinds = [ "vbd"; "vif"; "vfb"; "vkb"; "vfs"; "pci" ] in
+					List.map (fun dev_kind -> "device/"^dev_kind) dev_kinds
+				else []
 			);
 		);
 
