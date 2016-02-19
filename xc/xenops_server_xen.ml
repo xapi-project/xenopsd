@@ -2208,6 +2208,7 @@ module VIF = struct
 								~mac:vif.mac ~carrier:(vif.carrier && (vif.locking_mode <> Xenops_interface.Vif.Disabled))
 								~mtu:vif.mtu ~rate:vif.rate ~backend_domid
 								~other_config:vif.other_config
+								~static_ip_setting:vif.static_ip_setting
 								~extra_private_keys:(id :: vif.extra_private_keys @ locking_mode @ setup_vif_rules @ xenopsd_backend)
 								frontend_domid in
 						let (_: Device_common.device) = create task frontend_domid in
@@ -2338,6 +2339,36 @@ module VIF = struct
 				let di = Xenctrl.domain_getinfo xc device.frontend.domid in
 				if di.Xenctrl.hvm_guest
 				then ignore (run !Xc_path.setup_vif_rules ["classic"; tap_interface_name; vm; devid; "filter"])
+			)
+
+	let set_static_ip_setting task vm vif static_ip_setting =
+		let open Device_common in
+		with_xc_and_xs
+			(fun xc xs ->
+				let device = device_by_id xc xs vm Vif Newest (id_of vif) in
+				let domid = device.frontend.domid in
+				let devid = string_of_int device.frontend.devid in
+				let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s/static-ip-setting" domid devid in
+
+				List.iter (fun (x, y) ->
+					let ip_setting_path = Printf.sprintf "%s/%s" xenstore_path x in
+					debug "xenstore-write %s <- %s" ip_setting_path y;
+					xs.Xs.write ip_setting_path y
+				) static_ip_setting
+			)
+
+	let unset_static_ip_setting task vm vif key =
+		let open Device_common in
+		with_xc_and_xs
+			(fun xc xs ->
+				let device = device_by_id xc xs vm Vif Newest (id_of vif) in
+				let domid = device.frontend.domid in
+				let devid = string_of_int device.frontend.devid in
+				let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s/static-ip-setting" domid devid in
+
+				let ip_setting_path = Printf.sprintf "%s/%s" xenstore_path key in
+				debug "xenstore-rm <- %s" ip_setting_path;
+				xs.Xs.rm ip_setting_path
 			)
 
 	let get_state vm vif =
