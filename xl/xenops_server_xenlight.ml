@@ -1319,6 +1319,38 @@ module VIF = struct
 			)
 		)
 
+	let write_extra_config device extra_config mac =
+		let open Device_common in
+		with_xs (fun xs ->
+			let domid = device.frontend.domid in
+			let devid = string_of_int device.frontend.devid in
+			let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s" domid devid in
+			Xs.transaction xs (fun t ->
+				t.Xst.mkdir xenstore_path;
+				t.Xst.setperms xenstore_path
+					Xs_protocol.ACL.({owner = domid; other = NONE; acl = []});
+				t.Xst.write (Printf.sprintf "%s/static-ip-setting/%s" xenstore_path "mac") mac;
+				t.Xst.write (Printf.sprintf "%s/static-ip-setting/%s" xenstore_path "error-code") "0";
+				t.Xst.write (Printf.sprintf "%s/static-ip-setting/%s" xenstore_path "error-msg") "";
+				List.iter (fun (x, y) ->
+					let ip_setting_path = Printf.sprintf "%s/static-ip-setting/%s" xenstore_path x in
+					debug "xenstore-write %s <- %s" ip_setting_path y;
+					t.Xst.write ip_setting_path y
+				) extra_config
+			)
+		)
+
+	let remove_extra_config device =
+		let open Device_common in
+		with_xs (fun xs ->
+			let domid = device.frontend.domid in
+			let devid = string_of_int device.frontend.devid in
+			let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s" domid devid in
+			Xs.transaction xs (fun t ->
+				t.Xst.rm xenstore_path
+			)
+		)
+
 	let pre_plug vm hvm vif =
 		debug "VIF.pre_plug";
 		let backend_domid = with_xs (fun xs -> backend_domid_of xs vif) in
@@ -1389,11 +1421,14 @@ module VIF = struct
 						(* wait for plug (to be removed if possible) *)
 						let open Device_common in
 						let devid = vif.position in
+						let static_ip_setting = vif.static_ip_setting in
+						let mac = vif.mac in
 						let backend_domid = with_xs (fun xs -> backend_domid_of xs vif) in
 						let frontend = { domid = frontend_domid; kind = Vif; devid = devid } in
 						let backend = { domid = backend_domid; kind = Vif; devid = devid } in
 						let device = { backend = backend; frontend = frontend } in
 						with_xs (fun xs -> Hotplug.wait_for_plug task ~xs device);
+						write_extra_config device static_ip_setting mac;
 
 						(* add disconnect flag *)
 						let disconnect_path, flag = disconnect_flag device vif.locking_mode in
@@ -1419,7 +1454,8 @@ module VIF = struct
 					);
 					let device = device_by_id xs vm Device_common.Vif Oldest (id_of vif) in
 					Xenops_task.with_subtask task (Printf.sprintf "Vif.release %s" (id_of vif))
-						(fun () -> Hotplug.release' task ~xs device vm "vif" vif.position)
+						(fun () -> Hotplug.release' task ~xs device vm "vif" vif.position);
+					remove_extra_config device
 				with
 					| _ ->
 						debug "VM = %s; Ignoring missing device" (id_of vif)
@@ -1504,6 +1540,35 @@ module VIF = struct
 				let di = with_ctx (fun ctx -> Xenlight.Dominfo.get ctx device.frontend.domid) in
 				if di.Xenlight.Dominfo.domain_type = Xenlight.DOMAIN_TYPE_HVM
  				then ignore (run !Xl_path.setup_vif_rules ["xenlight"; tap_interface_name; vm; devid; "filter"])
+			)
+
+	let set_static_ip_setting task vm vif static_ip_setting =
+		let open Device_common in
+		with_xs
+			(fun xs ->
+				let device = device_by_id xs vm Vif Newest (id_of vif) in
+				let domid = device.frontend.domid in
+				let devid = string_of_int device.frontend.devid in
+				let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s/static-ip-setting" domid devid in
+				List.iter (fun (x, y) ->
+					let ip_setting_path = Printf.sprintf "%s/%s" xenstore_path x in
+					debug "xenstore-write %s <- %s" ip_setting_path y;
+					xs.Xs.write ip_setting_path y
+				) static_ip_setting
+			)
+
+	let unset_static_ip_setting task vm vif key =
+		let open Device_common in
+		with_xs
+			(fun xs ->
+				let device = device_by_id xs vm Vif Newest (id_of vif) in
+				let domid = device.frontend.domid in
+				let devid = string_of_int device.frontend.devid in
+				let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s/static-ip-setting" domid devid in
+
+				let ip_setting_path = Printf.sprintf "%s/%s" xenstore_path key in
+				debug "xenstore-rm <- %s" ip_setting_path;
+				xs.Xs.rm ip_setting_path
 			)
 
 	let get_state vm vif =

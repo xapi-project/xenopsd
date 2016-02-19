@@ -80,7 +80,8 @@ sig
 	       -> mac:string -> carrier:bool 
 	       -> ?mtu:int -> ?rate:(int64 * int64) option
 	       -> ?protocol:protocol -> ?backend_domid:Xenctrl.domid 
-	       -> ?other_config:((string * string) list) 
+	       -> ?other_config:((string * string) list)
+	       -> ?static_ip_setting:((string * string) list)
 	       -> ?extra_private_keys:(string * string) list -> Xenctrl.domid
 	       -> device
 	val set_carrier : xs:Xenstore.Xs.xsh -> device -> bool -> unit
