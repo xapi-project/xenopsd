@@ -127,6 +127,8 @@ module type S = sig
 		val move: Xenops_task.t -> Vm.id -> Vif.t -> Network.t -> unit
 		val set_carrier: Xenops_task.t -> Vm.id -> Vif.t -> bool -> unit
 		val set_locking_mode: Xenops_task.t -> Vm.id -> Vif.t -> Vif.locking_mode -> unit
+		val set_static_ip_setting: Xenops_task.t -> Vm.id -> Vif.t -> Vif.static_ip_setting -> unit
+		val unset_static_ip_setting: Xenops_task.t -> Vm.id -> Vif.t -> string -> unit
 
 		val get_state: Vm.id -> Vif.t -> Vif.state
 

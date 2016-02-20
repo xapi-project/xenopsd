@@ -64,6 +64,8 @@ type atomic =
 	| VIF_move of Vif.id * Network.t
 	| VIF_set_carrier of Vif.id * bool
 	| VIF_set_locking_mode of Vif.id * Vif.locking_mode
+	| VIF_set_static_ip_setting of Vif.id * Vif.static_ip_setting
+	| VIF_unset_static_ip_setting of Vif.id * string
 	| VIF_set_active of Vif.id * bool
 	| VM_hook_script of (Vm.id * Xenops_hooks.script * string)
 	| VBD_plug of Vbd.id
@@ -976,6 +978,22 @@ let perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xenops_t
 					B.VIF.set_locking_mode t (VIF_DB.vm_of id) vif mode
 
 				) (fun () -> VIF_DB.signal id)
+		| VIF_set_static_ip_setting (id, value) ->
+			debug "VIF.set_static_ip_setting %s %s" (VIF_DB.string_of_id id) (String.concat "; " (List.map (fun (a,b)-> a^":"^b) value));
+			finally
+				(fun () ->
+					let vif = VIF_DB.read_exn id in
+					VIF_DB.write id {vif with Vif.static_ip_setting = (List.append vif.Vif.static_ip_setting value)};
+					B.VIF.set_static_ip_setting t (VIF_DB.vm_of id) vif value
+				) (fun () -> VIF_DB.signal id)
+		| VIF_unset_static_ip_setting (id, key) ->
+			debug "VIF.unset_static_ip_setting %s %s" (VIF_DB.string_of_id id) key;
+			finally
+				(fun () ->
+					let vif = VIF_DB.read_exn id in
+					VIF_DB.write id {vif with Vif.static_ip_setting = (List.filter (fun (x, y) -> x <> key) vif.Vif.static_ip_setting)};
+					B.VIF.unset_static_ip_setting t (VIF_DB.vm_of id) vif key
+				) (fun () -> VIF_DB.signal id)
 		| VIF_set_active (id, b) ->
 			debug "VIF.set_active %s %b" (VIF_DB.string_of_id id) b;
 			B.VIF.set_active t (VIF_DB.vm_of id) (VIF_DB.read_exn id) b;
@@ -1241,7 +1259,9 @@ and trigger_cleanup_after_failure op t = match op with
 		| VIF_unplug (id, _)
 		| VIF_move (id, _)
 		| VIF_set_carrier (id, _)
-		| VIF_set_locking_mode (id, _) ->
+		| VIF_set_locking_mode (id, _)
+		| VIF_set_static_ip_setting (id, _)
+		| VIF_unset_static_ip_setting (id, _) ->
 			immediate_operation t.Xenops_task.dbg (fst id) (VIF_check_state id)
 
 		| PCI_plug id
@@ -1732,6 +1752,8 @@ module VIF = struct
 	let move _ dbg id network = queue_operation dbg (DB.vm_of id) (Atomic (VIF_move (id, network)))
 	let set_carrier _ dbg id carrier = queue_operation dbg (DB.vm_of id) (Atomic (VIF_set_carrier (id, carrier)))
 	let set_locking_mode _ dbg id carrier = queue_operation dbg (DB.vm_of id) (Atomic (VIF_set_locking_mode (id, carrier)))
+	let set_static_ip_setting _ dbg id value = queue_operation dbg (DB.vm_of id) (Atomic (VIF_set_static_ip_setting (id, value)))
+	let unset_static_ip_setting _ dbg id key = queue_operation dbg (DB.vm_of id) (Atomic (VIF_unset_static_ip_setting (id, key)))
 
 	let remove' id =
 		debug "VIF.remove %s" (string_of_id id);

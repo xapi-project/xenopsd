@@ -307,6 +307,18 @@ let set_locking_mode vm vif mode () =
 	let vifs = List.map (fun vif -> { vif with Vif.locking_mode = if this_one vif then mode else vif.Vif.locking_mode }) d.Domain.vifs in
 	DB.write vm { d with Domain.vifs = vifs }
 
+let set_static_ip_setting vm vif static_ip_setting () =
+	let d = DB.read_exn vm in
+	let this_one x = x.Vif.id = vif.Vif.id in
+	let vifs = List.map (fun vif -> { vif with Vif.static_ip_setting = if this_one vif then static_ip_setting else vif.Vif.static_ip_setting }) d.Domain.vifs in
+	DB.write vm { d with Domain.vifs = vifs }
+
+let unset_static_ip_setting vm vif key () =
+	let d = DB.read_exn vm in
+	let this_one x = x.Vif.id = vif.Vif.id in
+	let vifs = List.map (fun vif -> { vif with Vif.static_ip_setting = if this_one vif then [] else vif.Vif.static_ip_setting }) d.Domain.vifs in
+	DB.write vm { d with Domain.vifs = vifs }
+
 let remove_pci vm pci () =
 	let d = DB.read_exn vm in
 	let this_one x = x.Pci.id = pci.Pci.id in
@@ -415,6 +427,8 @@ module VIF = struct
 	let move _ vm vif network = Mutex.execute m (move_vif vm vif network)
 	let set_carrier _ vm vif carrier = Mutex.execute m (set_carrier vm vif carrier)
 	let set_locking_mode _ vm vif mode = Mutex.execute m (set_locking_mode vm vif mode)
+	let set_static_ip_setting _ vm vif static_ip_setting = Mutex.execute m (set_static_ip_setting vm vif static_ip_setting)
+	let unset_static_ip_setting _ vm vif key = Mutex.execute m (unset_static_ip_setting vm vif key)
 
 	let get_state vm vif = Mutex.execute m (vif_state vm vif)
 
