@@ -645,11 +645,15 @@ module Vif = struct
 let write_extra_config ~xs device extra_config mac =
 	let domid = device.frontend.domid in
 	let devid = string_of_int device.frontend.devid in
-	let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s" domid devid in	
+	let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s" domid devid in
+	let perms = Xs_protocol.ACL.({owner = domid; other = NONE; acl = []}) in
 
 	Xs.transaction xs (fun t ->
 		t.Xst.mkdir xenstore_path;
+		t.Xst.setperms xenstore_path perms;
 		t.Xst.write (Printf.sprintf "%s/static-ip-setting/%s" xenstore_path "mac") mac;
+		t.Xst.write (Printf.sprintf "%s/static-ip-setting/%s" xenstore_path "error-code") "0";
+		t.Xst.write (Printf.sprintf "%s/static-ip-setting/%s" xenstore_path "error-msg") "";
 		List.iter (fun (x, y) ->
 			let ip_setting_path = Printf.sprintf "%s/static-ip-setting/%s" xenstore_path x in
 			debug "xenstore-write %s <- %s" ip_setting_path y;
