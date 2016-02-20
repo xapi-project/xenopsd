@@ -614,6 +614,7 @@ module VifDeviceTests = DeviceTests(struct
 			rate = Some(1L, 2L);
 			backend = Network.Local "xenbr0";
 			other_config = [ "other", "config" ];
+			static_ip_setting = [ ("address", "192.168.1.10/24") ];
 			locking_mode = Vif.Unlocked;
 			extra_private_keys = [ "private", "keys" ];
 		}
@@ -633,6 +634,7 @@ module VifDeviceTests = DeviceTests(struct
 		assert_equal ~msg:"rate" ~printer:(function Some (a, b) -> Printf.sprintf "Some %Ld %Ld" a b | None -> "None") vif.rate vif'.rate;
 		assert_equal ~msg:"backend" ~printer:(fun x -> x |> Network.rpc_of_t |> Jsonrpc.to_string) vif.backend vif'.backend;
 		assert_equal ~msg:"other_config" ~printer:sl vif.other_config vif'.other_config;
+		assert_equal ~msg:"other_config" ~printer:sl vif.static_ip_setting vif'.static_ip_setting;
 		assert_equal ~msg:"extra_private_keys" ~printer:sl vif.extra_private_keys vif'.extra_private_keys
 end)
 
