@@ -641,12 +641,37 @@ end
 
 module Vif = struct
 
+let write_extra_xenserver_keys ~xs device extra_xenserver_keys =
+	let domid = device.frontend.domid in
+	let devid = string_of_int device.frontend.devid in
+	let base_xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s" domid devid in
+	let perms = Xs_protocol.ACL.({owner = domid; other = NONE; acl = []}) in
 
-let add (task: Xenops_task.t) ~xs ~devid ~netty ~mac ~carrier ?mtu ?(rate=None) ?(protocol=Protocol_Native) ?(backend_domid=0) ?(other_config=[]) ?(extra_private_keys=[]) domid =
-	debug "Device.Vif.add domid=%d devid=%d mac=%s carrier=%b rate=%s other_config=[%s] extra_private_keys=[%s]" domid devid mac carrier
+	Xs.transaction xs (fun t ->
+		t.Xst.mkdir base_xenstore_path;
+		t.Xst.setperms base_xenstore_path perms;
+		List.iter (fun (x, y) ->
+			let ip_setting_path = Printf.sprintf "%s/%s" base_xenstore_path x in
+			debug "xenstore-write %s <- %s" ip_setting_path y;
+			t.Xst.write ip_setting_path y
+		) extra_xenserver_keys
+	)
+
+let remove_extra_xenserver_keys ~xs device =
+	let domid = device.frontend.domid in
+	let devid = string_of_int device.frontend.devid in
+	let xenstore_path = Printf.sprintf "/local/domain/%d/xenserver/device/vif/%s" domid devid in
+
+	Xs.transaction xs (fun t ->
+		t.Xst.rm xenstore_path
+	)
+
+let add (task: Xenops_task.t) ~xs ~devid ~netty ~mac ~carrier ?mtu ?(rate=None) ?(protocol=Protocol_Native) ?(backend_domid=0) ?(other_config=[]) ?(extra_private_keys=[]) ?(extra_xenserver_keys=[]) domid =
+	debug "Device.Vif.add domid=%d devid=%d mac=%s carrier=%b rate=%s other_config=[%s] extra_private_keys=[%s] extra_xenserver_keys=[%s]" domid devid mac carrier
 	      (match rate with None -> "none" | Some (a, b) -> sprintf "(%Ld,%Ld)" a b)
 	      (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) other_config))
-	      (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) extra_private_keys));
+	      (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) extra_private_keys))
+	      (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) extra_xenserver_keys));
 	(* Filter the other_config keys using vif_udev_keys as a whitelist *)
 	let other_config = List.filter (fun (x, _) -> List.mem x vif_udev_keys) other_config in
 	let frontend = { domid = domid; kind = Vif; devid = devid } in
@@ -723,6 +748,7 @@ let add (task: Xenops_task.t) ~xs ~devid ~netty ~mac ~carrier ?mtu ?(rate=None) 
 	end;
 
 	Hotplug.wait_for_plug task ~xs device;
+	write_extra_xenserver_keys ~xs device extra_xenserver_keys;
 	device
 
 let clean_shutdown = Generic.clean_shutdown
@@ -742,8 +768,8 @@ let release (task: Xenops_task.t) ~xs (x: device) =
 		Hotplug.run_hotplug_script x [ "remove" ];
 		Hotplug.run_hotplug_script tap [ "remove" ];
 	end;
-	Hotplug.release task ~xs x
-
+	Hotplug.release task ~xs x;
+	remove_extra_xenserver_keys ~xs x
 
 let move ~xs (x: device) bridge =
 	let xs_bridge_path = Device_common.get_private_data_path_of_device x ^ "/bridge" in
