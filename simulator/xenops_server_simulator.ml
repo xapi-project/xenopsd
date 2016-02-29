@@ -307,16 +307,16 @@ let set_locking_mode vm vif mode () =
 	let vifs = List.map (fun vif -> { vif with Vif.locking_mode = if this_one vif then mode else vif.Vif.locking_mode }) d.Domain.vifs in
 	DB.write vm { d with Domain.vifs = vifs }
 
-let set_static_ip_setting vm vif static_ip_setting () =
+let set_ipv4_configuration vm vif ipv4_configuration () =
 	let d = DB.read_exn vm in
 	let this_one x = x.Vif.id = vif.Vif.id in
-	let vifs = List.map (fun vif -> { vif with Vif.static_ip_setting = if this_one vif then static_ip_setting else vif.Vif.static_ip_setting }) d.Domain.vifs in
+	let vifs = List.map (fun vif -> { vif with Vif.ipv4_configuration = if this_one vif then ipv4_configuration else vif.Vif.ipv4_configuration }) d.Domain.vifs in
 	DB.write vm { d with Domain.vifs = vifs }
 
-let unset_static_ip_setting vm vif key () =
+let set_ipv6_configuration vm vif ipv6_configuration () =
 	let d = DB.read_exn vm in
 	let this_one x = x.Vif.id = vif.Vif.id in
-	let vifs = List.map (fun vif -> { vif with Vif.static_ip_setting = if this_one vif then [] else vif.Vif.static_ip_setting }) d.Domain.vifs in
+	let vifs = List.map (fun vif -> { vif with Vif.ipv6_configuration = if this_one vif then ipv6_configuration else vif.Vif.ipv6_configuration }) d.Domain.vifs in
 	DB.write vm { d with Domain.vifs = vifs }
 
 let remove_pci vm pci () =
@@ -427,8 +427,8 @@ module VIF = struct
 	let move _ vm vif network = Mutex.execute m (move_vif vm vif network)
 	let set_carrier _ vm vif carrier = Mutex.execute m (set_carrier vm vif carrier)
 	let set_locking_mode _ vm vif mode = Mutex.execute m (set_locking_mode vm vif mode)
-	let set_static_ip_setting _ vm vif static_ip_setting = Mutex.execute m (set_static_ip_setting vm vif static_ip_setting)
-	let unset_static_ip_setting _ vm vif key = Mutex.execute m (unset_static_ip_setting vm vif key)
+	let set_ipv4_configuration _ vm vif ipv4_configuration = Mutex.execute m (set_ipv4_configuration vm vif ipv4_configuration)
+	let set_ipv6_configuration _ vm vif ipv6_configuration = Mutex.execute m (set_ipv6_configuration vm vif ipv6_configuration)
 
 	let get_state vm vif = Mutex.execute m (vif_state vm vif)
 
