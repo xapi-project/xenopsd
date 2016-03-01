@@ -42,6 +42,7 @@ val disconnect_path_of_device : xs:Xenstore.Xs.xsh -> device -> string
 val kthread_pid_path_of_device : xs:Xenstore.Xs.xsh -> device -> string
 val error_path_of_device : xs:Xenstore.Xs.xsh -> device -> string
 val backend_error_path_of_device : xs:Xenstore.Xs.xsh -> device -> string
+val extra_xenserver_vif_path_of_device: xs:Xenstore.Xs.xsh -> device -> string
 
 val backend_shutdown_request_path_of_device : xs:Xenstore.Xs.xsh -> device -> string
 val backend_shutdown_done_path_of_device : xs:Xenstore.Xs.xsh -> device -> string
@@ -54,6 +55,7 @@ val backend_state_path_of_device : xs:Xenstore.Xs.xsh -> device -> string
 val get_private_path : Xenctrl.domid -> string
 val get_private_path_by_uuid : Uuidm.t -> string
 val get_private_data_path_of_device : device -> string
+val get_extra_xenserver_vif_path_of_device: xs:Xenstore.Xs.xsh -> device -> string -> string
 
 val string_of_endpoint : endpoint -> string
 val string_of_device : device -> string

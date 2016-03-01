@@ -2239,6 +2239,31 @@ module VIF = struct
 			_locking_mode, "disabled";
 		]
 
+	let xenstore_of_static_ip_setting vif =
+		let constant_setting = [ "static-ip-setting/mac", vif.mac;
+					 "static-ip-setting/error-code", "0";
+					 "static-ip-setting/error-msg", "" ]
+		in
+		let ipv4_setting = match vif.ipv4_configuration with
+		| Unspecified4 -> [ "static-ip-setting/enabled", "0" ]
+		| Static4 (address :: _, gateway) ->
+			let enabled = "static-ip-setting/enabled" , "1" in
+			let address = "static-ip-setting/address", address in
+			let gateway = match gateway with Some value -> ["static-ip-setting/gateway", value] | None -> [] in
+			enabled :: address :: gateway
+		| _ -> []
+		in
+		let ipv6_setting = match vif.ipv6_configuration with
+		| Unspecified6 -> [ "static-ip-setting/enabled6", "0" ]
+		| Static6 (address6 :: _, gateway6) ->
+			let enabled6 = "static-ip-setting/enabled6" , "1" in
+			let address6 = "static-ip-setting/address6", address6 in
+			let gateway6 = match gateway6 with Some value -> ["static-ip-setting/gateway6", value] | None -> [] in
+			enabled6 :: address6 :: gateway6
+		| _ -> []
+		in
+		constant_setting @ ipv4_setting @ ipv6_setting
+
 	let disconnect_flag device disconnected =
 		let path = Hotplug.vif_disconnect_path device in
 		let flag = if disconnected then "1" else "0" in
@@ -2271,6 +2296,7 @@ module VIF = struct
 				let setup_vif_rules = [ "setup-vif-rules", !Xc_path.setup_vif_rules ] in
 				let xenopsd_backend = [ "xenopsd-backend", "classic" ] in
 				let locking_mode = xenstore_of_locking_mode vif.locking_mode in
+				let static_ip_setting = xenstore_of_static_ip_setting vif in
 
 				let interfaces = interfaces_of_vif frontend_domid vif.id vif.position in
 
@@ -2288,6 +2314,7 @@ module VIF = struct
 								~mtu:vif.mtu ~rate:vif.rate ~backend_domid
 								~other_config:vif.other_config
 								~extra_private_keys:(id :: vif.extra_private_keys @ locking_mode @ setup_vif_rules @ xenopsd_backend)
+								~extra_xenserver_keys:static_ip_setting
 								frontend_domid in
 						let (_: Device_common.device) = create task frontend_domid in
 
@@ -2417,6 +2444,86 @@ module VIF = struct
 				let di = Xenctrl.domain_getinfo xc device.frontend.domid in
 				if di.Xenctrl.hvm_guest
 				then ignore (run !Xc_path.setup_vif_rules ["classic"; tap_interface_name; vm; devid; "filter"])
+			)
+	
+	let set_ipv4_configuration task vm vif ipv4_configuration =
+		let open Device_common in
+		with_xc_and_xs
+			(fun xc xs ->
+				let device = device_by_id xc xs vm Vif Newest (id_of vif) in
+				let xenstore_path = Device_common.get_extra_xenserver_vif_path_of_device ~xs:xs device "static-ip-setting" in
+				Xs.transaction xs (fun t ->
+					match ipv4_configuration with
+					| Unspecified4 -> begin
+						let ip_setting_enabled = Printf.sprintf "%s/%s" xenstore_path "enabled" in
+						debug "xenstore-write %s <- %s" ip_setting_enabled "0";
+						t.Xst.write ip_setting_enabled "0";
+
+						let ip_setting_address = Printf.sprintf "%s/%s" xenstore_path "address" in
+						t.Xst.rm ip_setting_address;
+
+						let ip_setting_gateway = Printf.sprintf "%s/%s" xenstore_path "gateway" in
+						t.Xst.rm ip_setting_gateway
+						end
+					| Static4 (address :: _, gateway) -> begin
+						let ip_setting_enabled = Printf.sprintf "%s/%s" xenstore_path "enabled" in
+						debug "xenstore-write %s <- %s" ip_setting_enabled "1";
+						t.Xst.write ip_setting_enabled "1";
+
+						let ip_setting_address = Printf.sprintf "%s/%s" xenstore_path "address" in
+						debug "xenstore-write %s <- %s" ip_setting_address address;
+						t.Xst.write ip_setting_address address;
+
+						match gateway with
+						| None -> ()
+						| Some value -> begin
+							let ip_setting_gateway = Printf.sprintf "%s/%s" xenstore_path "gateway" in
+							debug "xenstore-write %s <- %s" ip_setting_gateway value;
+							t.Xst.write ip_setting_gateway value
+						  end
+						end
+					| _ -> ()
+				)
+			)
+
+	let set_ipv6_configuration task vm vif ipv6_configuration =
+		let open Device_common in
+		with_xc_and_xs
+			(fun xc xs ->
+				let device = device_by_id xc xs vm Vif Newest (id_of vif) in
+				let xenstore_path = Device_common.get_extra_xenserver_vif_path_of_device ~xs:xs device "static-ip-setting" in
+				Xs.transaction xs (fun t ->
+					match ipv6_configuration with
+					| Unspecified6 -> begin
+						let ip_setting_enabled = Printf.sprintf "%s/%s" xenstore_path "enabled6" in
+						debug "xenstore-write %s <- %s" ip_setting_enabled "0";
+						t.Xst.write ip_setting_enabled "0";
+						
+						let ip_setting_address = Printf.sprintf "%s/%s" xenstore_path "address6" in
+						t.Xst.rm ip_setting_address;
+
+						let ip_setting_gateway = Printf.sprintf "%s/%s" xenstore_path "gateway6" in
+						t.Xst.rm ip_setting_gateway
+						end
+					| Static6 (address6 :: _, gateway6) -> begin
+						let ip_setting_enabled = Printf.sprintf "%s/%s" xenstore_path "enabled6" in
+						debug "xenstore-write %s <- %s" ip_setting_enabled "1";
+						t.Xst.write ip_setting_enabled "1";
+
+						let ip_setting_address = Printf.sprintf "%s/%s" xenstore_path "address6" in
+						debug "xenstore-write %s <- %s" ip_setting_address address6;
+						t.Xst.write ip_setting_address address6;
+
+						match gateway6 with
+						| None -> ()
+						| Some value -> begin
+							let ip_setting_gateway = Printf.sprintf "%s/%s" xenstore_path "gateway6" in
+							debug "xenstore-write %s <- %s" ip_setting_gateway value;
+							t.Xst.write ip_setting_gateway value
+						  end
+						end
+					| _ -> ()
+				)
 			)
 
 	let get_state vm vif =
