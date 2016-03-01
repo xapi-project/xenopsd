@@ -196,11 +196,16 @@ let wait_for_connect (task: Xenops_task.t) ~xs (x: device) =
 (* Wait for the device to be released by the backend driver (via udev) and
    then deallocate any resources which are registered (in our private bit of
    xenstore) *)
-let release (task:Xenops_task.t) ~xs (x: device) =
+let release (task:Xenops_task.t) ~xs ?(extra_xenserver_path="") (x: device) =
 	debug "Hotplug.release: %s" (string_of_device x);
 	wait_for_unplug task ~xs x;
-	let path = get_hotplug_path x in
-	xs.Xs.rm path
+	let hotplug_path = get_hotplug_path x in
+
+	Xs.transaction xs (fun t ->
+		t.Xst.rm hotplug_path;
+		if extra_xenserver_path <> "" then
+			t.Xst.rm extra_xenserver_path
+	)
 
 let run_hotplug_script device args =
 	let kind = string_of_kind device.backend.kind in

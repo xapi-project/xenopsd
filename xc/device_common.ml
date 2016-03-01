@@ -90,6 +90,12 @@ let disconnect_path_of_device ~xs (x: device) =
 		(string_of_kind x.frontend.kind)
 		x.frontend.devid
 
+(** Location of the vif device node's extra xenserver xenstore keys *)
+let extra_xenserver_vif_path_of_device ~xs (x: device) =
+	sprintf "%s/xenserver/device/vif/%d"
+		(xs.Xs.getdomainpath x.frontend.domid)
+		x.frontend.devid
+
 (** Where linux blkback writes its thread id. NB this won't work in a driver domain *)
 let kthread_pid_path_of_device ~xs (x: device) =
 	sprintf "%s/kthread-pid" (backend_path_of_device ~xs x)
@@ -159,6 +165,9 @@ let get_private_path_by_uuid uuid =
 
 let get_private_data_path_of_device (x: device) =
 	sprintf "%s/private/%s/%d" (get_private_path x.frontend.domid) (string_of_kind x.backend.kind) x.backend.devid
+
+let get_extra_xenserver_vif_path_of_device ~xs (x: device) childkey =
+	sprintf "%s/%s" (extra_xenserver_vif_path_of_device ~xs x) childkey
 
 let device_of_backend (backend: endpoint) (domu: Xenctrl.domid) = 
   let frontend = { domid = domu;
