@@ -84,7 +84,8 @@ Library xenopsd
     xenstore.unix,
     xenstore_transport,
     xenstore_transport.unix,
-    oclock
+    oclock,
+    systemd
   CSources:	      sockopt_stubs.c
 
 Executable set_domain_uuid
@@ -137,7 +138,8 @@ Executable xenopsd_xc_main
     rrd,
     sexplib,
     xcp-inventory,
-    profiling
+    profiling,
+    systemd
   CSources:           fsync_stubs.c, xenctrlext_stubs.c
 
 Executable watch_test

@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: 109e0ec543651aed62733bb129a75555)
+# DO NOT EDIT (digest: d2938069bc8f7b96ba1a10eb6ebc47b7)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -33,6 +33,7 @@ true: annot, bin_annot
 "lib/sockopt_stubs.c": pkg_rpclib.syntax
 "lib/sockopt_stubs.c": pkg_sexplib
 "lib/sockopt_stubs.c": pkg_sexplib.syntax
+"lib/sockopt_stubs.c": pkg_systemd
 "lib/sockopt_stubs.c": pkg_threads
 "lib/sockopt_stubs.c": pkg_threads.posix
 "lib/sockopt_stubs.c": pkg_uri
@@ -73,6 +74,7 @@ true: annot, bin_annot
 <lib/suspend_image_viewer.{native,byte}>: pkg_rpclib.syntax
 <lib/suspend_image_viewer.{native,byte}>: pkg_sexplib
 <lib/suspend_image_viewer.{native,byte}>: pkg_sexplib.syntax
+<lib/suspend_image_viewer.{native,byte}>: pkg_systemd
 <lib/suspend_image_viewer.{native,byte}>: pkg_threads
 <lib/suspend_image_viewer.{native,byte}>: pkg_threads.posix
 <lib/suspend_image_viewer.{native,byte}>: pkg_uri
@@ -97,6 +99,7 @@ true: annot, bin_annot
 <lib/*.ml{,i,y}>: pkg_rpclib.syntax
 <lib/*.ml{,i,y}>: pkg_sexplib
 <lib/*.ml{,i,y}>: pkg_sexplib.syntax
+<lib/*.ml{,i,y}>: pkg_systemd
 <lib/*.ml{,i,y}>: pkg_threads
 <lib/*.ml{,i,y}>: pkg_threads.posix
 <lib/*.ml{,i,y}>: pkg_uri
@@ -131,6 +134,7 @@ true: annot, bin_annot
 <xc/xenops_xc_main.{native,byte}>: pkg_rrd
 <xc/xenops_xc_main.{native,byte}>: pkg_sexplib
 <xc/xenops_xc_main.{native,byte}>: pkg_sexplib.syntax
+<xc/xenops_xc_main.{native,byte}>: pkg_systemd
 <xc/xenops_xc_main.{native,byte}>: pkg_threads
 <xc/xenops_xc_main.{native,byte}>: pkg_threads.posix
 <xc/xenops_xc_main.{native,byte}>: pkg_uri
@@ -164,6 +168,7 @@ true: annot, bin_annot
 "xc/fsync_stubs.c": pkg_rrd
 "xc/fsync_stubs.c": pkg_sexplib
 "xc/fsync_stubs.c": pkg_sexplib.syntax
+"xc/fsync_stubs.c": pkg_systemd
 "xc/fsync_stubs.c": pkg_threads
 "xc/fsync_stubs.c": pkg_threads.posix
 "xc/fsync_stubs.c": pkg_uri
@@ -192,6 +197,7 @@ true: annot, bin_annot
 "xc/xenctrlext_stubs.c": pkg_rrd
 "xc/xenctrlext_stubs.c": pkg_sexplib
 "xc/xenctrlext_stubs.c": pkg_sexplib.syntax
+"xc/xenctrlext_stubs.c": pkg_systemd
 "xc/xenctrlext_stubs.c": pkg_threads
 "xc/xenctrlext_stubs.c": pkg_threads.posix
 "xc/xenctrlext_stubs.c": pkg_uri
@@ -225,6 +231,7 @@ true: annot, bin_annot
 <xc/watch_test.{native,byte}>: pkg_rpclib.syntax
 <xc/watch_test.{native,byte}>: pkg_sexplib
 <xc/watch_test.{native,byte}>: pkg_sexplib.syntax
+<xc/watch_test.{native,byte}>: pkg_systemd
 <xc/watch_test.{native,byte}>: pkg_threads
 <xc/watch_test.{native,byte}>: pkg_threads.posix
 <xc/watch_test.{native,byte}>: pkg_uri
@@ -248,6 +255,7 @@ true: annot, bin_annot
 <xc/*.ml{,i,y}>: pkg_rpclib.syntax
 <xc/*.ml{,i,y}>: pkg_sexplib
 <xc/*.ml{,i,y}>: pkg_sexplib.syntax
+<xc/*.ml{,i,y}>: pkg_systemd
 <xc/*.ml{,i,y}>: pkg_threads
 <xc/*.ml{,i,y}>: pkg_threads.posix
 <xc/*.ml{,i,y}>: pkg_uri
@@ -276,6 +284,7 @@ true: annot, bin_annot
 <simulator/xenops_simulator_main.{native,byte}>: pkg_rpclib.syntax
 <simulator/xenops_simulator_main.{native,byte}>: pkg_sexplib
 <simulator/xenops_simulator_main.{native,byte}>: pkg_sexplib.syntax
+<simulator/xenops_simulator_main.{native,byte}>: pkg_systemd
 <simulator/xenops_simulator_main.{native,byte}>: pkg_threads
 <simulator/xenops_simulator_main.{native,byte}>: pkg_threads.posix
 <simulator/xenops_simulator_main.{native,byte}>: pkg_uri
@@ -299,6 +308,7 @@ true: annot, bin_annot
 <simulator/*.ml{,i,y}>: pkg_rpclib.syntax
 <simulator/*.ml{,i,y}>: pkg_sexplib
 <simulator/*.ml{,i,y}>: pkg_sexplib.syntax
+<simulator/*.ml{,i,y}>: pkg_systemd
 <simulator/*.ml{,i,y}>: pkg_threads
 <simulator/*.ml{,i,y}>: pkg_threads.posix
 <simulator/*.ml{,i,y}>: pkg_uri
@@ -329,6 +339,7 @@ true: annot, bin_annot
 <libvirt/xenops_libvirt_main.{native,byte}>: pkg_rpclib.syntax
 <libvirt/xenops_libvirt_main.{native,byte}>: pkg_sexplib
 <libvirt/xenops_libvirt_main.{native,byte}>: pkg_sexplib.syntax
+<libvirt/xenops_libvirt_main.{native,byte}>: pkg_systemd
 <libvirt/xenops_libvirt_main.{native,byte}>: pkg_threads
 <libvirt/xenops_libvirt_main.{native,byte}>: pkg_threads.posix
 <libvirt/xenops_libvirt_main.{native,byte}>: pkg_uri
@@ -353,6 +364,7 @@ true: annot, bin_annot
 <libvirt/*.ml{,i,y}>: pkg_rpclib.syntax
 <libvirt/*.ml{,i,y}>: pkg_sexplib
 <libvirt/*.ml{,i,y}>: pkg_sexplib.syntax
+<libvirt/*.ml{,i,y}>: pkg_systemd
 <libvirt/*.ml{,i,y}>: pkg_threads
 <libvirt/*.ml{,i,y}>: pkg_threads.posix
 <libvirt/*.ml{,i,y}>: pkg_uri
@@ -388,6 +400,7 @@ true: annot, bin_annot
 <xl/xenops_xl_main.{native,byte}>: pkg_rpclib.syntax
 <xl/xenops_xl_main.{native,byte}>: pkg_sexplib
 <xl/xenops_xl_main.{native,byte}>: pkg_sexplib.syntax
+<xl/xenops_xl_main.{native,byte}>: pkg_systemd
 <xl/xenops_xl_main.{native,byte}>: pkg_threads
 <xl/xenops_xl_main.{native,byte}>: pkg_threads.posix
 <xl/xenops_xl_main.{native,byte}>: pkg_uri
@@ -417,6 +430,7 @@ true: annot, bin_annot
 <xl/*.ml{,i,y}>: pkg_rpclib.syntax
 <xl/*.ml{,i,y}>: pkg_sexplib
 <xl/*.ml{,i,y}>: pkg_sexplib.syntax
+<xl/*.ml{,i,y}>: pkg_systemd
 <xl/*.ml{,i,y}>: pkg_threads
 <xl/*.ml{,i,y}>: pkg_threads.posix
 <xl/*.ml{,i,y}>: pkg_uri
@@ -446,6 +460,7 @@ true: annot, bin_annot
 "xl/fsync_stubs.c": pkg_rpclib.syntax
 "xl/fsync_stubs.c": pkg_sexplib
 "xl/fsync_stubs.c": pkg_sexplib.syntax
+"xl/fsync_stubs.c": pkg_systemd
 "xl/fsync_stubs.c": pkg_threads
 "xl/fsync_stubs.c": pkg_threads.posix
 "xl/fsync_stubs.c": pkg_uri
@@ -475,6 +490,7 @@ true: annot, bin_annot
 "xl/poll_stubs.c": pkg_rpclib.syntax
 "xl/poll_stubs.c": pkg_sexplib
 "xl/poll_stubs.c": pkg_sexplib.syntax
+"xl/poll_stubs.c": pkg_systemd
 "xl/poll_stubs.c": pkg_threads
 "xl/poll_stubs.c": pkg_threads.posix
 "xl/poll_stubs.c": pkg_uri
@@ -506,6 +522,7 @@ true: annot, bin_annot
 <test/xenopsd_test.{native,byte}>: pkg_rpclib.syntax
 <test/xenopsd_test.{native,byte}>: pkg_sexplib
 <test/xenopsd_test.{native,byte}>: pkg_sexplib.syntax
+<test/xenopsd_test.{native,byte}>: pkg_systemd
 <test/xenopsd_test.{native,byte}>: pkg_threads
 <test/xenopsd_test.{native,byte}>: pkg_threads.posix
 <test/xenopsd_test.{native,byte}>: pkg_uri
@@ -529,6 +546,7 @@ true: annot, bin_annot
 <test/*.ml{,i,y}>: pkg_rpclib.syntax
 <test/*.ml{,i,y}>: pkg_sexplib
 <test/*.ml{,i,y}>: pkg_sexplib.syntax
+<test/*.ml{,i,y}>: pkg_systemd
 <test/*.ml{,i,y}>: pkg_threads
 <test/*.ml{,i,y}>: pkg_threads.posix
 <test/*.ml{,i,y}>: pkg_uri

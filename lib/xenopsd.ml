@@ -119,7 +119,7 @@ let configure ?(specific_options=[]) ?(specific_essential_paths=[]) ?(specific_n
 	| `Error m ->
 		error "%s" m;
 		exit 1
-
+exception Notify_failed
 
 let main backend =
 	Printexc.record_backtrace true;
@@ -167,7 +167,9 @@ let main backend =
 		()
 	) ();
 	Scheduler.start ();
+        ignore (Daemon.notify Daemon.State.Ready);
 	Xenops_server.WorkerPool.start !worker_pool_size;
+
 	while true do
 		try
 			Thread.delay 60.
