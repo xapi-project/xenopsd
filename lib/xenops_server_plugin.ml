@@ -90,6 +90,7 @@ module type S = sig
 		val request_rdp: Vm.t -> bool -> unit
 		val set_domain_action_request: Vm.t -> domain_action_request option -> unit
 		val get_domain_action_request: Vm.t -> domain_action_request option
+		val set_auto_update_drivers: Vm.t -> bool -> unit
 
 		val generate_state_string: Vm.t -> string
 		val get_internal_state: (string * string) list -> (string * Network.t) list -> Vm.t -> string

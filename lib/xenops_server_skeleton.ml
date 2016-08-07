@@ -75,6 +75,7 @@ module VM = struct
 	let generate_state_string _ = ""
 	let get_internal_state _ _ _ = ""
 	let set_internal_state _ _ = ()
+	let set_auto_update_drivers _ _ = ()
 	let minimum_reboot_delay = 0.
 end
 module PCI = struct
