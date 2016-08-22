@@ -167,7 +167,7 @@ let main backend =
 		()
 	) ();
 	Scheduler.start ();
-        ignore (Daemon.notify Daemon.State.Ready);
+	ignore (Daemon.notify Daemon.State.Ready);
 	Xenops_server.WorkerPool.start !worker_pool_size;
 
 	while true do
