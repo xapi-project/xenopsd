@@ -568,6 +568,7 @@ let unplugged_vif = {
      plugged = false;
      kthread_pid = 0;
      media_present = false;
+     domid = None;
 }
 
 let unplugged_vgpu = {

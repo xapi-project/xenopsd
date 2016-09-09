@@ -2590,11 +2590,13 @@ module VIF = struct
 					   from xenstore. The corrolary is that: only when the device
 					   is finally deleted from xenstore, can we remove bridges or
 					   switch configuration. *)
+					let domid = d.Device_common.frontend.Device_common.domid in
 					{
 						Vif.active = true;
 						plugged = true;
 						media_present = true;
-						kthread_pid = kthread_pid
+						kthread_pid = kthread_pid;
+						domid = Some domid
 					}
 				with
 					| (Does_not_exist(_,_))
