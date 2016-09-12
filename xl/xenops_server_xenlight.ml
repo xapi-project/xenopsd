@@ -1657,7 +1657,7 @@ module VIF = struct
 						plugged = true;
 						media_present = true;
 						kthread_pid = kthread_pid;
-						domid = Some (domid)
+						domid = Some domid
 					}
 				with
 					| (Does_not_exist(_,_))
