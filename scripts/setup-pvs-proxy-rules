@@ -101,7 +101,7 @@ case $ACTION in
         PVS_PROXY_MAC=$($VSCTL get interface "$PVS_PROXY_INTERFACE" mac_in_use | tr -d '"')
         PVS_PROXY_OFPORT=$($VSCTL get interface "$PVS_PROXY_INTERFACE" ofport)
         PVS_VM_OFPORT=$($VSCTL get interface "$PVS_VM_INTERFACE" ofport)
-        PVS_IF_ID=$(cat /sys/class/net/"$PVS_PROXY_INTERFACE"/ifindex)
+        PVS_IF_ID=$(cat /sys/class/net/"$PVS_VM_INTERFACE"/ifindex)
         PVS_IF_ID_LSB=$((PVS_IF_ID&0xffff))
         PVS_IF_ID_MSB=$((PVS_IF_ID>>32))
 
@@ -109,10 +109,10 @@ case $ACTION in
             handle_error "The $PVS_VM_INTERFACE interface was not found on a bridge"
         fi
 
-        logger -t "$LOG_TAG" "Adding rules to $PVS_BRIDGE for $PVS_PROXY_INTERFACE/$PVS_IF_ID $PVS_PROXY_OFPORT/$PVS_PROXY_MAC and $PVS_VM_INTERFACE $PVS_VM_OFPORT/$PVS_VM_MAC"
+        logger -t "$LOG_TAG" "Adding rules to $PVS_BRIDGE for $PVS_PROXY_INTERFACE $PVS_PROXY_OFPORT/$PVS_PROXY_MAC and $PVS_VM_INTERFACE/$PVS_IF_ID $PVS_VM_OFPORT/$PVS_VM_MAC"
 
-        $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=0,table=$((PVS_PORT_TABLE)),actions=NORMAL
-        $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=0,table=$((PVS_ACTION_TABLE)),actions=NORMAL
+        $OFCTL --strict add-flow "$PVS_BRIDGE" priority=0,table=$((PVS_PORT_TABLE)),actions=NORMAL
+        $OFCTL --strict add-flow "$PVS_BRIDGE" priority=0,table=$((PVS_ACTION_TABLE)),actions=NORMAL
 
         for ((j=0; j<PVS_SERVER_NUM; j++)) do
             path="${PRIVATE_PATH}/pvs-server-$j-addresses"
@@ -170,14 +170,13 @@ case $ACTION in
         $XSWRITE "${PRIVATE_PATH}/pvs-rules-active" ''
         ;;
     remove)
-        PVS_PROXY_MAC=$($VSCTL get interface "$PVS_PROXY_INTERFACE" mac_in_use | tr -d '"')
-        PVS_VM_OFPORT=$($VSCTL get interface "$PVS_VM_INTERFACE" ofport)
-        PVS_IF_ID=$(cat /sys/class/net/"$PVS_PROXY_INTERFACE"/ifindex)
-        if [ $? -ne 0 ] || [ -z "$PVS_VM_OFPORT" ]; then
-            handle_error "The $PVS_VM_INTERFACE interface was not found on a bridge"
+        path="${PRIVATE_PATH}/$TYPE-ifindex"
+        PVS_IF_ID=$($XSREAD "$path")
+        if [ $? -ne 0 ] || [ -z "$PVS_IF_ID" ]; then
+            handle_error "The $PVS_VM_INTERFACE's ID[$PVS_IF_ID] not found"
         fi
 
-        logger -t "$LOG_TAG" "Removing rules from $PVS_BRIDGE for $PVS_PROXY_INTERFACE $PVS_PROXY_MAC and $PVS_VM_INTERFACE $PVS_VM_OFPORT/$PVS_VM_MAC"
+        logger -t "$LOG_TAG" "Removing rules from $PVS_BRIDGE for $PVS_PROXY_INTERFACE $PVS_VM_INTERFACE/$PVS_IF_ID"
 
         $OFCTL del-flows "$PVS_BRIDGE" cookie="$PVS_IF_ID"/-1
         if [ "${TYPE}" = "vif" ]; then
