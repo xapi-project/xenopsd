@@ -111,10 +111,8 @@ case $ACTION in
 
         logger -t "$LOG_TAG" "Adding rules to $PVS_BRIDGE for $PVS_PROXY_INTERFACE/$PVS_IF_ID $PVS_PROXY_OFPORT/$PVS_PROXY_MAC and $PVS_VM_INTERFACE $PVS_VM_OFPORT/$PVS_VM_MAC"
 
-        # TODO: How do we cleanup these rules
-        # non-pvs packets
-        $OFCTL --strict add-flow "$PVS_BRIDGE" priority=0,table=$((PVS_PORT_TABLE)),actions=NORMAL
-        $OFCTL --strict add-flow "$PVS_BRIDGE" priority=0,table=$((PVS_ACTION_TABLE)),actions=NORMAL
+        $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=0,table=$((PVS_PORT_TABLE)),actions=NORMAL
+        $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=0,table=$((PVS_ACTION_TABLE)),actions=NORMAL
 
         for ((j=0; j<PVS_SERVER_NUM; j++)) do
             path="${PRIVATE_PATH}/pvs-server-$j-addresses"
@@ -138,7 +136,7 @@ case $ACTION in
                 # Packets from proxied clients that have a PVS-server IP must
                 # be dropped. This is done separately for vif and tap interfaces
                 # by matching on the in_port.
-                $OFCTL --strict add-flow "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO)),in_port="$PVS_VM_OFPORT",ip,nw_src="$PVS_SERVER_IP",actions=drop
+                $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=$((PVS_RULE_PRIO)),in_port="$PVS_VM_OFPORT",ip,nw_src="$PVS_SERVER_IP",actions=drop
 
                 # The following rules are independent of the in_port, so we'll
                 # need just one copy per VIF. We'll only apply them if the
@@ -146,11 +144,11 @@ case $ACTION in
                 # because tap interfaces are not always present, while vifs are.
                 if [ "${TYPE}" = "vif" ]; then
                     # Packets from client->server that need to be proxied.
-                    $OFCTL --strict add-flow "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO-1)),udp,dl_src="$PVS_VM_MAC",nw_dst="$PVS_SERVER_IP",actions=load:"$PVS_IF_ID_LSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_LSB"[],load:"$PVS_IF_ID_MSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_MSB"[],load:"$DIR_CLIENT_TO_SERVER"-\>"$PVS_NXM_NX_DIR_REG"[],resubmit\(,"$PVS_PORT_TABLE"\)
+                    $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=$((PVS_RULE_PRIO-1)),udp,dl_src="$PVS_VM_MAC",nw_dst="$PVS_SERVER_IP",actions=load:"$PVS_IF_ID_LSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_LSB"[],load:"$PVS_IF_ID_MSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_MSB"[],load:"$DIR_CLIENT_TO_SERVER"-\>"$PVS_NXM_NX_DIR_REG"[],resubmit\(,"$PVS_PORT_TABLE"\)
                     # Packets from proxy->client.
-                    $OFCTL --strict add-flow "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO)),udp,dl_src="$PVS_PROXY_MAC",dl_dst="$PVS_VM_MAC",nw_src="$PVS_SERVER_IP",actions=load:"$PVS_IF_ID_LSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_LSB"[],load:"$PVS_IF_ID_MSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_MSB"[],load:"$DIR_PROXY_TO_CLIENT"-\>"$PVS_NXM_NX_DIR_REG"[],resubmit\(,"$PVS_PORT_TABLE"\)
+                    $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=$((PVS_RULE_PRIO)),udp,dl_src="$PVS_PROXY_MAC",dl_dst="$PVS_VM_MAC",nw_src="$PVS_SERVER_IP",actions=load:"$PVS_IF_ID_LSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_LSB"[],load:"$PVS_IF_ID_MSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_MSB"[],load:"$DIR_PROXY_TO_CLIENT"-\>"$PVS_NXM_NX_DIR_REG"[],resubmit\(,"$PVS_PORT_TABLE"\)
                     # Packets from server->client that need to be proxied.
-                    $OFCTL --strict add-flow "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO-1)),udp,dl_dst="$PVS_VM_MAC",nw_src="$PVS_SERVER_IP",actions=load:"$PVS_IF_ID_LSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_LSB"[],load:"$PVS_IF_ID_MSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_MSB"[],load:"$DIR_SERVER_TO_CLIENT"-\>"$PVS_NXM_NX_DIR_REG"[],resubmit\(,"$PVS_PORT_TABLE"\)
+                    $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,priority=$((PVS_RULE_PRIO-1)),udp,dl_dst="$PVS_VM_MAC",nw_src="$PVS_SERVER_IP",actions=load:"$PVS_IF_ID_LSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_LSB"[],load:"$PVS_IF_ID_MSB"-\>"$PVS_NXM_NX_CLIENT_ID_REG_MSB"[],load:"$DIR_SERVER_TO_CLIENT"-\>"$PVS_NXM_NX_DIR_REG"[],resubmit\(,"$PVS_PORT_TABLE"\)
                 fi
             done
             # The following rules are independent of the in_port, so we'll
@@ -159,11 +157,11 @@ case $ACTION in
             # because tap interfaces are not always present, while vifs are.
             if [ "${TYPE}" = "vif" ]; then
                 for ((i=PVS_STARTPORT; i<=PVS_ENDPORT; i++)) do
-                    $OFCTL --strict add-flow "$PVS_BRIDGE" table=$((PVS_PORT_TABLE)),priority=$((PVS_RULE_PRIO)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB",udp,tp_dst="$i",actions=resubmit\(,"$PVS_ACTION_TABLE"\)
+                    $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,table=$((PVS_PORT_TABLE)),priority=$((PVS_RULE_PRIO)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB",udp,tp_dst="$i",actions=resubmit\(,"$PVS_ACTION_TABLE"\)
                 done
-                $OFCTL --strict add-flow "$PVS_BRIDGE" table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO-1)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_CLIENT_TO_SERVER",actions="$PVS_PROXY_OFPORT"
-                $OFCTL --strict add-flow "$PVS_BRIDGE" table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_PROXY_TO_CLIENT",actions=NORMAL
-                $OFCTL --strict add-flow "$PVS_BRIDGE" table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO-1)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_SERVER_TO_CLIENT",actions="$PVS_PROXY_OFPORT"
+                $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO-1)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_CLIENT_TO_SERVER",actions="$PVS_PROXY_OFPORT"
+                $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_PROXY_TO_CLIENT",actions=NORMAL
+                $OFCTL --strict add-flow "$PVS_BRIDGE" cookie=$PVS_IF_ID,table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO-1)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_SERVER_TO_CLIENT",actions="$PVS_PROXY_OFPORT"
 
             fi
             unset IFS
@@ -175,65 +173,13 @@ case $ACTION in
         PVS_PROXY_MAC=$($VSCTL get interface "$PVS_PROXY_INTERFACE" mac_in_use | tr -d '"')
         PVS_VM_OFPORT=$($VSCTL get interface "$PVS_VM_INTERFACE" ofport)
         PVS_IF_ID=$(cat /sys/class/net/"$PVS_PROXY_INTERFACE"/ifindex)
-        PVS_IF_ID_LSB=$((PVS_IF_ID&0xffff))
-        PVS_IF_ID_MSB=$((PVS_IF_ID>>32))
         if [ $? -ne 0 ] || [ -z "$PVS_VM_OFPORT" ]; then
             handle_error "The $PVS_VM_INTERFACE interface was not found on a bridge"
         fi
 
         logger -t "$LOG_TAG" "Removing rules from $PVS_BRIDGE for $PVS_PROXY_INTERFACE $PVS_PROXY_MAC and $PVS_VM_INTERFACE $PVS_VM_OFPORT/$PVS_VM_MAC"
 
-        for ((j=0; j<PVS_SERVER_NUM; j++)) do
-            path="${PRIVATE_PATH}/pvs-server-$j-addresses"
-            PVS_SERVER_IPS=$($XSREAD "$path")
-            if [ $? -ne 0 ] || [ -z "$PVS_SERVER_IPS" ]; then
-                handle_xs_error "$path"
-            fi
-
-            path="${PRIVATE_PATH}/pvs-server-$j-ports"
-            PVS_PORTS=$($XSREAD "$path")
-            if [ $? -ne 0 ] || [ -z "$PVS_PORTS" ]; then
-                handle_xs_error "$path"
-            fi
-            PVS_STARTPORT=$(echo "$PVS_PORTS" | cut -f1 -d-)
-            PVS_ENDPORT=$(echo "$PVS_PORTS" | cut -f2 -d-)
-
-            logger -t "$LOG_TAG" "PVS server $j: $PVS_SERVER_IPS ($PVS_STARTPORT-$PVS_ENDPORT)"
-
-            IFS=$','
-            for PVS_SERVER_IP in $PVS_SERVER_IPS; do
-                # Packets from proxied clients that have a PVS-server IP must
-                # be dropped. This is done separately for vif and tap interfaces
-                # by matching on the in_port.
-                $OFCTL --strict del-flows "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO)),in_port="$PVS_VM_OFPORT",ip,nw_src="$PVS_SERVER_IP"
-
-                # The following rules are independent of the in_port, so we'll
-                # need just one copy per VIF. We'll only apply them if the
-                # script is called for a vif interface, not for a tap interface,
-                # because tap interfaces are not always present, while vifs are.
-                if [ "${TYPE}" = "vif" ]; then
-                    # Packets from client->server that need to be proxied.
-                    $OFCTL --strict del-flows "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO-1)),udp,dl_src="$PVS_VM_MAC",nw_dst="$PVS_SERVER_IP"
-                    # Packets from proxy->client.
-                    $OFCTL --strict del-flows "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO)),udp,dl_src="$PVS_PROXY_MAC",dl_dst="$PVS_VM_MAC",nw_src="$PVS_SERVER_IP"
-                    # Packets from server->client that need to be proxied.
-                    $OFCTL --strict del-flows "$PVS_BRIDGE" priority=$((PVS_RULE_PRIO-1)),udp,dl_dst="$PVS_VM_MAC",nw_src="$PVS_SERVER_IP"
-                fi
-            done
-            # The following rules are independent of the in_port, so we'll
-            # need just one copy per VIF. We'll only apply them if the
-            # script is called for a vif interface, not for a tap interface,
-            # because tap interfaces are not always present, while vifs are.
-            if [ "${TYPE}" = "vif" ]; then
-                for ((i=PVS_STARTPORT; i<=PVS_ENDPORT; i++)) do
-                    $OFCTL --strict del-flows "$PVS_BRIDGE" table=$((PVS_PORT_TABLE)),priority=$((PVS_RULE_PRIO)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB",udp,tp_dst=$i
-                done
-                $OFCTL --strict del-flows "$PVS_BRIDGE" table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO-1)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_CLIENT_TO_SERVER"
-                $OFCTL --strict del-flows "$PVS_BRIDGE" table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_PROXY_TO_CLIENT"
-                $OFCTL --strict del-flows "$PVS_BRIDGE" table=$((PVS_ACTION_TABLE)),priority=$((PVS_RULE_PRIO-1)),"$PVS_CLIENT_ID_REG_LSB"="$PVS_IF_ID_LSB","$PVS_CLIENT_ID_REG_MSB"="$PVS_IF_ID_MSB","$PVS_DIR_REG"="$DIR_SERVER_TO_CLIENT"
-            fi
-            unset IFS
-        done
+        $OFCTL del-flows "$PVS_BRIDGE" cookie="$PVS_IF_ID"/-1
         if [ "${TYPE}" = "vif" ]; then
             # Again, don't do the following when a tap goes away, because
             # vif may still be there.
