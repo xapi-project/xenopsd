@@ -20,7 +20,8 @@
 *)
 
 open String
-open Xenops_utils
+module Unixext_orig = Unixext
+open Xenops_utils (* contains a different Unixext *)
 open Xenops_task
 
 module D=Debug.Make(struct let name="bootloader" end)
@@ -158,7 +159,7 @@ let sanity_check_path p = match p with
 	| p when Filename.is_relative p ->
 		raise (Bad_error ("Bootloader returned a relative path for kernel or ramdisk: "^p))
 	| p ->
-		let canonical_path = Unixext.resolve_dot_and_dotdot p in
+		let canonical_path = Unixext_orig.resolve_dot_and_dotdot p in
 		match Filename.dirname canonical_path with
 			| "/var/run/xen/pygrub" (* From pygrub, including when called by eliloader *)
 			| "/var/run/xend/boot" (* From eliloader *)
