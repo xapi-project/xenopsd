@@ -126,7 +126,7 @@ let parse_output_simple x =
     try parse_line_optimistic acc l
     with Not_found -> acc
   in
-  let linelist = Stdext.Xstringext.String.split '\n' x in
+  let linelist = Xstringext.String.split '\n' x in
   let content = List.fold_left parse_line {kernel=None; ramdisk=None; args=None} linelist in
   {
     kernel_path = (match content.kernel with
