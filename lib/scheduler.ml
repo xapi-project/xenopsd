@@ -20,7 +20,7 @@ module Int64Map = Map.Make(struct type t = int64 let compare = compare end)
 
 module Delay = struct
 	(* Concrete type is the ends of a pipe *)
-	type t = { 
+	type t = {
 		(* A pipe is used to wake up a thread blocked in wait: *)
 		mutable pipe_out: Unix.file_descr option;
 		mutable pipe_in: Unix.file_descr option;
@@ -29,7 +29,7 @@ module Delay = struct
 		m: Mutex.t
 	}
 
-	let make () = 
+	let make () =
 		{ pipe_out = None;
 		pipe_in = None;
 		signalled = false;
@@ -39,7 +39,7 @@ module Delay = struct
 
 	let wait (x: t) (seconds: float) =
 		let to_close = ref [ ] in
-		let close' fd = 
+		let close' fd =
 			if List.mem fd !to_close then Unix.close fd;
 			to_close := List.filter (fun x -> fd <> x) !to_close in
 		finally
@@ -65,7 +65,7 @@ module Delay = struct
 					r = []
 				with Pre_signalled -> false
 			)
-			(fun () -> 
+			(fun () ->
 				Mutex.execute x.m
 					(fun () ->
 						x.pipe_out <- None;
@@ -73,7 +73,7 @@ module Delay = struct
 						List.iter close' !to_close)
 			)
 
-	let signal (x: t) = 
+	let signal (x: t) =
 		Mutex.execute x.m
 			(fun () ->
 				match x.pipe_in with
@@ -94,9 +94,10 @@ end
 
 	type time =
 		| Absolute of int64
-		| Delta of int with rpc
+  | Delta of int
+[@@deriving rpc]
 
-	type t = int64 * int with rpc
+type t = int64 * int [@@deriving rpc]
 
 	let now () = Unix.gettimeofday () |> ceil |> Int64.of_float
 
@@ -104,8 +105,8 @@ end
 		type u = {
 			time: int64;
 			thing: string;
-		} with rpc
-		type t = u list with rpc
+  } [@@deriving rpc]
+  type t = u list [@@deriving rpc]
 		let make () =
 			let now = now () in
 			Mutex.execute m
@@ -183,5 +184,3 @@ end
 	let start () =
 		let (_: Thread.t) = Thread.create main_loop () in
 		()
-
-

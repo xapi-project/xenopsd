@@ -41,7 +41,7 @@ let query _ _ _ = {
 
 let backend = ref None
 let get_backend () = match !backend with
- | Some x -> x 
+ | Some x -> x
   | None -> failwith "No backend implementation set"
 
 let ignore_exception msg f x =
@@ -101,7 +101,7 @@ type atomic =
 	| VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
 	| Parallel of Vm.id * string * atomic list
 
-with rpc
+[@@deriving rpc]
 
 let string_of_atomic x = x |> rpc_of_atomic |> Jsonrpc.to_string
 
@@ -125,7 +125,7 @@ type operation =
 	| VBD_check_state of Vbd.id
 	| VIF_check_state of Vif.id
 	| Atomic of atomic
-with rpc
+[@@deriving rpc]
 
 let string_of_operation x = x |> rpc_of_operation |> Jsonrpc.to_string
 
@@ -158,7 +158,7 @@ module TASK = struct
 					Updates.add (Dynamic.Task id) updates
 				end else debug "TASK.signal %s (object deleted)" id
 			)
-	let stat _ dbg id = stat' id 
+	let stat _ dbg id = stat' id
 	let destroy' id = destroy tasks id; Updates.remove (Dynamic.Task id) updates
 	let destroy _ dbg id = destroy' id
 	let list _ dbg = list tasks |> List.map task
@@ -200,7 +200,7 @@ module PCI_DB = struct
 		include Pci
 		let namespace = "PCI"
 		type key = id
-		let key k = [ fst k; "pci." ^ (snd k) ]	
+		let key k = [ fst k; "pci." ^ (snd k) ]
 	end)
 	let vm_of = fst
 	let string_of_id (a, b) = a ^ "." ^ b
@@ -501,8 +501,8 @@ module Redirector = struct
 		type q = {
 			tag: string;
 			items: operation list
-		} with rpc
-		type t = q list with rpc
+  } [@@deriving rpc]
+  type t = q list [@@deriving rpc]
 
 		let make () =
 			Mutex.execute m
@@ -516,7 +516,7 @@ module Redirector = struct
 				)
 
 	end
-end		
+end
 
 module Worker = struct
 	type state =
@@ -637,7 +637,7 @@ module WorkerPool = struct
 			ctime: string;
 			dbg: string;
 			subtasks: (string * string) list;
-		} with rpc
+  } [@@deriving rpc]
 		let of_task t = {
 				id = t.Xenops_task.id;
 				ctime = t.Xenops_task.ctime |> Date.of_float |> Date.to_string;
@@ -647,8 +647,8 @@ module WorkerPool = struct
 		type w = {
 			state: string;
 			task: task option;
-		} with rpc
-		type t = w list with rpc
+  } [@@deriving rpc]
+  type t = w list [@@deriving rpc]
 		let make () =
 			Mutex.execute m
 				(fun () ->
@@ -745,7 +745,7 @@ let export_metadata vdi_map vif_map id =
 	debug "Remapping bootloader VDIs";
 
 	(* Remap the bootloader vdis *)
-	let vm_t = { vm_t with Vm.ty = 
+	let vm_t = { vm_t with Vm.ty =
 			match vm_t.Vm.ty with
 				| Vm.HVM _ -> vm_t.Vm.ty
 				| Vm.PV pv_info ->
@@ -753,7 +753,7 @@ let export_metadata vdi_map vif_map id =
 						Vm.boot = match pv_info.Vm.boot with
 							| Vm.Direct x -> pv_info.Vm.boot
 							| Vm.Indirect pv_indirect_boot ->
-								Vm.Indirect { pv_indirect_boot with Vm.devices = 
+								Vm.Indirect { pv_indirect_boot with Vm.devices =
 										List.map (remap_vdi vdi_map) pv_indirect_boot.Vm.devices } } } in
 
 	let vbds = VBD_DB.vbds id in
@@ -809,7 +809,7 @@ let rec atomics_of_operation = function
 			VM_hook_script(id, Xenops_hooks.VM_pre_start, Xenops_hooks.reason__none);
 		] @ simplify [
 			VM_create (id, None)
-		] @ [	
+		] @ [
 			VM_build (id,force);
 		] @ (List.map (fun vbd -> VBD_set_active (vbd.Vbd.id, true))
 			(VBD_DB.vbds id)
@@ -835,7 +835,7 @@ let rec atomics_of_operation = function
 		) @ simplify (List.map (fun vif -> VIF_plug vif.Vif.id)
 			(VIF_DB.vifs id |> vif_plug_order)
 		) @ simplify [
-			(* Unfortunately this has to be done after the vbd,vif 
+			(* Unfortunately this has to be done after the vbd,vif
 			   devices have been created since qemu reads xenstore keys
 			   in preference to its own commandline. After this is
 			   fixed we can consider creating qemu as a part of the
@@ -1050,7 +1050,7 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			finally
 				(fun () ->
 					let vif = VIF_DB.read_exn id in
-					(* Nb, this VIF_DB write needs to come before the call to set_locking_mode 
+					(* Nb, this VIF_DB write needs to come before the call to set_locking_mode
 					   as the scripts will read from the disk! *)
 					VIF_DB.write id {vif with Vif.locking_mode = mode};
 					B.VIF.set_locking_mode t (VIF_DB.vm_of id) vif mode
@@ -1246,7 +1246,7 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			(* Spend at most the first minute waiting for a clean shutdown ack. This allows
 			   us to abort early. *)
 			if not (B.VM.request_shutdown t vm reason (min 60. timeout))
-			then raise (Failed_to_acknowledge_shutdown_request);		
+			then raise (Failed_to_acknowledge_shutdown_request);
 			let remaining_timeout = max 0. (timeout -. (Unix.gettimeofday () -. start)) in
 			if not (B.VM.wait_shutdown t vm reason remaining_timeout)
 			then raise (Failed_to_shutdown(id, timeout))
@@ -1436,7 +1436,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 		| VM_poweroff (id, timeout) ->
 			debug "VM.poweroff %s" id;
 			perform_atomics (atomics_of_operation op) t;
-			VM_DB.signal id			
+			VM_DB.signal id
 		| VM_reboot (id, timeout) ->
 			debug "VM.reboot %s" id;
 			rebooting id (fun () -> perform_atomics (atomics_of_operation op) t);
@@ -1880,7 +1880,7 @@ module VIF = struct
 	let add _ dbg x =
 		Debug.with_thread_associated dbg (fun () -> add' x) ()
 
-	let plug _ dbg id = queue_operation dbg (DB.vm_of id) (VIF_hotplug id) 
+	let plug _ dbg id = queue_operation dbg (DB.vm_of id) (VIF_hotplug id)
 	let unplug _ dbg id force = queue_operation dbg (DB.vm_of id) (VIF_hotunplug (id, force))
 	let move _ dbg id network = queue_operation dbg (DB.vm_of id) (Atomic (VIF_move (id, network)))
 	let set_carrier _ dbg id carrier = queue_operation dbg (DB.vm_of id) (Atomic (VIF_set_carrier (id, carrier)))
@@ -1987,7 +1987,7 @@ module VM = struct
 	let add _ dbg x =
 		Debug.with_thread_associated dbg (fun () -> add' x) ()
 
-	let remove _ dbg id = 
+	let remove _ dbg id =
 		let task = queue_operation_and_wait dbg id (Atomic (VM_remove id)) in
 		match task.Xenops_task.state with
 		| Task.Completed _ ->
@@ -1996,7 +1996,7 @@ module VM = struct
 			TASK.destroy' task.Xenops_task.id;
 			let e = e |> Exception.exnty_of_rpc |> exn_of_exnty in
 			raise e
-		| Task.Pending _ -> 
+		| Task.Pending _ ->
 			error "VM.remove: queue_operation_and_wait returned a pending task";
 			Xenops_task.cancel tasks task.Xenops_task.id;
 			raise (Cancelled task.Xenops_task.id)
@@ -2054,7 +2054,7 @@ module VM = struct
 
 	let suspend _ dbg id disk = queue_operation dbg id (VM_suspend (id, Disk disk))
 
-	let resume _ dbg id disk = queue_operation dbg id (VM_resume (id, Disk disk)) 
+	let resume _ dbg id disk = queue_operation dbg id (VM_resume (id, Disk disk))
 
 	let s3suspend _ dbg id = queue_operation dbg id (Atomic(VM_s3suspend id))
 	let s3resume _ dbg id = queue_operation dbg id (Atomic(VM_s3resume id))
@@ -2105,7 +2105,7 @@ module VM = struct
 				let headers = Cohttp.Header.of_list [
 					"User-agent", "xenopsd"
 				] in
-				let response = Cohttp.Response.make ~version:`HTTP_1_1 
+				let response = Cohttp.Response.make ~version:`HTTP_1_1
 				  ~status:`Not_found ~headers () in
 				Response.write (fun _ -> ()) response s
 		) ()
@@ -2151,7 +2151,7 @@ module VM = struct
 						platformdata
 				in
 				let vm = add' {md.Metadata.vm with platformdata} in
-				
+
 				let vbds = List.map
 					(fun x ->
 						(* If receiving an HVM migration from XS 6.2 or earlier, the hd*
@@ -2184,7 +2184,7 @@ module VM = struct
 				let (_: Pci.id list) = List.map PCI.add' pcis in
 				let (_: Vgpu.id list) = List.map VGPU.add' vgpus in
 				md.Metadata.domains |> Opt.iter (B.VM.set_internal_state (VM_DB.read_exn vm));
-				vm 
+				vm
 			) ()
 end
 
@@ -2226,12 +2226,12 @@ module UPDATES = struct
 		Debug.with_thread_associated dbg
 			(fun () ->
 				debug "UPDATES.inject_barrier %s %d" vm_id id;
-				let filter k _ = 
-					match k with 
+				let filter k _ =
+					match k with
 						| Dynamic.Task _ -> false
-						| Dynamic.Vm id 
-						| Dynamic.Vbd (id,_) 
-						| Dynamic.Vif (id,_) 
+						| Dynamic.Vm id
+						| Dynamic.Vbd (id,_)
+						| Dynamic.Vif (id,_)
 						| Dynamic.Pci (id,_)
 						| Dynamic.Vgpu (id,_) -> id=vm_id
 				in
@@ -2323,7 +2323,7 @@ module Diagnostics = struct
 		updates: Updates.Dump.t;
 		tasks: WorkerPool.Dump.task list;
 		vm_actions: (string * domain_action_request option) list;
-	} with rpc
+ } [@@deriving rpc]
 
 	let make () =
 		let module B = (val get_backend (): S) in {
@@ -2340,4 +2340,4 @@ module Diagnostics = struct
 end
 
 let get_diagnostics _ _ () =
-	Diagnostics.make () |> Diagnostics.rpc_of_t |> Jsonrpc.to_string 
+	Diagnostics.make () |> Diagnostics.rpc_of_t |> Jsonrpc.to_string

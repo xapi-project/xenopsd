@@ -22,7 +22,7 @@ module Interface = struct
 	type t = {
 		name: string;
 		vif: Vif.id;
-	} with rpc
+ } [@@deriving rpc]
 end
 
 module DB = TypedTable(struct
@@ -31,4 +31,3 @@ module DB = TypedTable(struct
 	type key = string
 	let key x = [ x ]
 end)
-

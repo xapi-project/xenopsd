@@ -36,8 +36,8 @@ let bootloader_of_string = function
   | "pygrub" -> Some Pygrub | "eliloader" -> Some Eliloader | _ -> None
 
 let path_of_bootloader = function
-  | Pygrub -> !Path.pygrub
-  | Eliloader -> !Path.eliloader
+  | Pygrub -> !Xpath.pygrub
+  | Eliloader -> !Xpath.eliloader
 
 let supported_bootloaders =  List.map string_of_bootloader [ Pygrub; Eliloader ]
 
@@ -56,7 +56,7 @@ type t = {
 }
 
 (** Helper function to generate a bootloader commandline *)
-let command bootloader q pv_bootloader_args image vm_uuid = 
+let command bootloader q pv_bootloader_args image vm_uuid =
   (* Let's not do anything fancy while parsing the pv_bootloader_args string:
      no escaping of spaces or quotes for now *)
   let pv_bootloader_args = if pv_bootloader_args = "" then [] else Stdext.Xstringext.String.split ' ' pv_bootloader_args in
@@ -79,7 +79,7 @@ let command bootloader q pv_bootloader_args image vm_uuid =
       vm;
       pv_bootloader_args;
       image;
-    ] in    
+    ] in
     path_of_bootloader Eliloader, List.concat args
   | None -> raise (Unknown_bootloader bootloader)
 

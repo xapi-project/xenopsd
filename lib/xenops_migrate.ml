@@ -91,6 +91,5 @@ module Forwarded_http_request = struct
 		query: (string*string) list;
 		cookie: (string * string) list;
 		body: string option;
-	} with rpc
+ } [@@deriving rpc]
 end
-
