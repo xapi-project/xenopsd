@@ -111,14 +111,14 @@ let run cmd args =
 type qemu_frontend =
 	| Name of string (* block device path or bridge name *)
 	| Device of Device_common.device
-with rpc
+[@@deriving rpc]
 
 type attached_vdi = {
 	domid: int;
 	attach_info: Storage_interface.attach_info;
-} with rpc
+} [@@deriving rpc]
 
-(* The following module contains left-overs from the "classic" domain.ml 
+(* The following module contains left-overs from the "classic" domain.ml
    Note: "has_vendor_device" parameter won't do anything for the libxl backend
 	(i.e. the xenstore key won't be written) *)
 module Domain = struct
@@ -131,20 +131,20 @@ module Domain = struct
 		platformdata: (string * string) list;
 		bios_strings: (string * string) list;
 		has_vendor_device: bool;
-	} with rpc
+	} [@@deriving rpc]
 
 	type build_hvm_info = {
 		shadow_multiplier: float;
 		video_mib: int;
-	} with rpc
+	} [@@deriving rpc]
 
 	type build_pv_info = {
 		cmdline: string;
 		ramdisk: string option;
-	} with rpc
+	} [@@deriving rpc]
 
 	type builder_spec_info = BuildHVM of build_hvm_info | BuildPV of build_pv_info
-	with rpc
+	[@@deriving rpc]
 
 	type build_info = {
 		memory_max: int64;    (* memory max in kilobytes *)
@@ -152,7 +152,7 @@ module Domain = struct
 		kernel: string;       (* in hvm case, point to hvmloader *)
 		vcpus: int;           (* vcpus max *)
 		priv: builder_spec_info;
-	} with rpc
+	} [@@deriving rpc]
 
 	let allowed_xsdata_prefixes = [ "vm-data"; "FIST" ]
 
@@ -238,7 +238,7 @@ module VmExtra = struct
 		last_start_time: float;
 		nomigrate: bool;  (* platform:nomigrate   at boot time *)
 		nested_virt: bool (* platform:nested_virt at boot time *)
-	} with rpc
+	} [@@deriving rpc]
 
 	type non_persistent_t = {
 		create_info: Domain.create_info;
@@ -252,12 +252,12 @@ module VmExtra = struct
 		pci_msitranslate: bool;
 		pci_power_mgmt: bool;
 		pv_drivers_detected: bool;
-	} with rpc
+	} [@@deriving rpc]
 
 	type t = {
 		persistent: persistent_t;
 		non_persistent: non_persistent_t;
-	} with rpc
+	} [@@deriving rpc]
 
 	let default_persistent_t =
 		{ build_info = None
@@ -528,7 +528,7 @@ let device_by_id xs vm kind domain_selection id =
 				raise (Device_not_connected)
 
 (* Extra keys to store in VBD backends to allow us to deactivate VDIs: *)
-type backend = disk option with rpc
+type backend = disk option [@@deriving rpc]
 let _vdi_id = "vdi-id"
 let _dp_id = "dp-id"
 
@@ -636,7 +636,7 @@ module PCI = struct
 		let msitranslate = if Opt.default non_persistent.VmExtra.pci_msitranslate pci.msitranslate then true else false in
 		let power_mgmt = if Opt.default non_persistent.VmExtra.pci_power_mgmt pci.power_mgmt then true else false in
 		let open Xenlight.Device_pci in
-		let pci' = {with_ctx (fun ctx -> default ctx ()) with
+  let pci' = { (with_ctx (fun ctx -> default ctx ())) with
 			func; dev; bus; domain; msitranslate; power_mgmt;
 		} in
 		pci'
@@ -649,7 +649,7 @@ module PCI = struct
 				debug "Calling Xenlight.Device_pci.assignable_remove";
 				assignable_add ctx pci' true;
 				debug "Calling Xenlight.Device_pci.add";
-				Xenlight_events.async (add ctx pci' frontend_domid); 
+				Xenlight_events.async (add ctx pci' frontend_domid);
 				debug "Call Xenlight.Device_pci.add completed";
 			)
 		) Newest vm
@@ -666,11 +666,11 @@ module PCI = struct
 		on_frontend (fun _ _ frontend_domid _ ->
 			with_ctx (fun ctx ->
 				let open Xenlight.Device_pci in
-				let pci' = {default ctx () with
+    let pci' = {(default ctx ()) with
 					func; dev; bus; domain; msitranslate; power_mgmt
 				} in
 				debug "Calling Xenlight.Device_pci.destroy";
-				Xenlight_events.async (destroy ctx pci' frontend_domid); 
+				Xenlight_events.async (destroy ctx pci' frontend_domid);
 				debug "Call Xenlight.Device_pci.destroy completed";
 				debug "Calling Xenlight.Device_pci.assignable_remove";
 				assignable_remove ctx pci' true;
@@ -847,7 +847,7 @@ module VBD = struct
 				let extra_backend_keys = List.map (fun (k, v) -> "sm-data/" ^ k, v) (vdi.attach_info.Storage_interface.xenstore_data) in
 				with_ctx (fun ctx ->
 					let open Xenlight.Device_disk in
-					let disk = {default ctx () with
+     let disk = {(default ctx ()) with
 						backend_domid;
 						pdev_path = Some (vdi.attach_info.Storage_interface.params);
 						vdev = Some vdev;
@@ -859,7 +859,7 @@ module VBD = struct
 						is_cdrom = 0;
 					} in
 					debug "Calling Xenlight.Device_disk.add";
-					Xenlight_events.async (add ctx disk frontend_domid); 
+					Xenlight_events.async (add ctx disk frontend_domid);
 					debug "Call Xenlight.Device_disk.add completed"
 				);
 				(* write extra XS keys *)
@@ -911,7 +911,7 @@ module VBD = struct
 					let disk = Xenlight.Device_disk.of_vdev ctx domid vdev in
 					Xenops_task.with_subtask task (Printf.sprintf "Vbd.clean_shutdown") (fun () ->
 						debug "Calling Xenlight.Device_disk.remove";
-						Xenlight_events.async (Xenlight.Device_disk.remove ctx disk domid); 
+						Xenlight_events.async (Xenlight.Device_disk.remove ctx disk domid);
 						debug "Call Xenlight.Device_disk.remove completed"
 					)
 				)
@@ -1052,7 +1052,7 @@ module VBD = struct
 		(* call libxenlight to plug vbd *)
 		let open Xenlight.Device_disk in
 		let disk = with_ctx (fun ctx ->
-			{default ctx () with
+      {(default ctx ()) with
 				backend_domid; pdev_path; vdev = Some vdev; backend; format; script; removable;
 				readwrite; is_cdrom;
 			}) in
@@ -1078,7 +1078,7 @@ module VBD = struct
 							with_ctx (fun ctx ->
 								let open Xenlight.Device_disk in
 								debug "Calling Xenlight.Device_disk.add";
-								Xenlight_events.async (add ctx disk frontend_domid); 
+								Xenlight_events.async (add ctx disk frontend_domid);
 								debug "Call Xenlight.Device_disk.add completed"
 							);
 							(* write extra XS keys *)
@@ -1137,11 +1137,11 @@ module VBD = struct
 							Xenops_task.with_subtask task (Printf.sprintf "Vbd.clean_shutdown %s" (id_of vbd)) (fun () ->
 								if force then begin
 									debug "Calling Xenlight.Device_disk.destroy";
-									Xenlight_events.async (Xenlight.Device_disk.destroy ctx disk domid); 
+									Xenlight_events.async (Xenlight.Device_disk.destroy ctx disk domid);
 									debug "Call Xenlight.Device_disk.destroy completed"
 								end else begin
 									debug "Calling Xenlight.Device_disk.remove";
-									Xenlight_events.async (Xenlight.Device_disk.remove ctx disk domid); 
+									Xenlight_events.async (Xenlight.Device_disk.remove ctx disk domid);
 									debug "Call Xenlight.Device_disk.remove completed"
 								end
 							)
@@ -1188,7 +1188,7 @@ module VBD = struct
 						| Some vdev, Some domid ->
 							let open Xenlight.Device_disk in
 							let vdi = attach_and_activate task xs vm vbd (Some disk) in
-							let disk' = {of_vdev ctx domid vdev with
+       let disk' = {(of_vdev ctx domid vdev) with
 								pdev_path = Some vdi.attach_info.Storage_interface.params;
 								format = Xenlight.DISK_FORMAT_RAW;
 							} in
@@ -1223,7 +1223,7 @@ module VBD = struct
 					match vdev, domid with
 					| Some vdev, Some domid ->
 						let open Xenlight.Device_disk in
-						let disk' = {of_vdev ctx domid vdev with
+      let disk' = {(of_vdev ctx domid vdev) with
 							format = Xenlight.DISK_FORMAT_EMPTY;
 							script = Some !Xl_path.vbd_script;
 						} in
@@ -1428,7 +1428,7 @@ module VIF = struct
 
 		let open Xenlight.Device_nic in
 		let nic = with_ctx (fun ctx ->
-			{default ctx () with
+      {(default ctx ()) with
 				backend_domid; devid; mtu; model = None; mac; ip = None; bridge = Some bridge; ifname = None;
 				script = Some script; nictype; rate_bytes_per_interval; rate_interval_usecs;
 			}) in
@@ -1574,7 +1574,7 @@ module VIF = struct
 				if di.Xenlight.Dominfo.domain_type = Xenlight.DOMAIN_TYPE_HVM
  				then ignore (run !Xl_path.setup_vif_rules ["xenlight"; tap_interface_name; vm; devid; "filter"])
 			)
-	
+
 	let set_ip_unspecified xs xenstore_path suffix =
 		Xs.transaction xs (fun t ->
 			let ip_setting_enabled = Printf.sprintf "%s/%s%s" xenstore_path "enabled" suffix in
@@ -1603,7 +1603,7 @@ module VIF = struct
 				debug "xenstore-write %s <- %s" ip_setting_gateway value;
 				t.Xst.write ip_setting_gateway value
 		)
-	
+
 	let set_ipv4_configuration task vm vif ipv4_configuration =
 		let open Device_common in
 		with_xs
@@ -2173,7 +2173,8 @@ module VM = struct
 								1024L
 						| PV _ -> 0L, 0L
 				in
-				let b_info =
+
+    let b_info =
 					let open Xenlight.Domain_build_info in
 					match vm.Vm.ty with
 					| HVM hvm_info ->
@@ -2208,9 +2209,9 @@ module VM = struct
 								boot = Some hvm_info.Xenops_interface.Vm.boot_order;
 								usb = Some true;
 								usbdevice_list = [ "tablet" ];
-#if xen45
-								serial_list = begin
-									match hvm_info.Xenops_interface.Vm.serial with 
+#if xen45 = 1
+                serial_list = begin
+									match hvm_info.Xenops_interface.Vm.serial with
 									| Some x -> [x] | None -> []
 								end;
 								serial = None;
@@ -2299,7 +2300,7 @@ module VM = struct
 				in
 
 				(* create and build structures *)
-				let c_info = Xenlight.Domain_create_info.({ with_ctx (fun ctx -> default ctx ()) with
+    let c_info = Xenlight.Domain_create_info.({ (with_ctx (fun ctx -> default ctx ())) with
 					xl_type = (if hvm then Xenlight.DOMAIN_TYPE_HVM else Xenlight.DOMAIN_TYPE_PV);
 					hap = Some hvm;
 					ssidref = vm.Vm.ssidref;
@@ -2323,9 +2324,9 @@ module VM = struct
 					extra = [];
 					extra_pv = [];
 					extra_hvm = [];
-					sched_params = Xenlight.Domain_sched_params.({with_ctx (fun ctx -> default ctx ()) with weight = -1; cap = -1; period = -1; slice = -1; latency = -1; extratime = -1});
+     sched_params = Xenlight.Domain_sched_params.({(with_ctx (fun ctx -> default ctx ())) with weight = -1; cap = -1; period = -1; slice = -1; latency = -1; extratime = -1});
 				}) in
-				let domain_config = Xenlight.Domain_config.({ with_ctx (fun ctx -> default ctx ()) with
+    let domain_config = Xenlight.Domain_config.({(with_ctx (fun ctx -> default ctx ())) with
 					c_info;
 					b_info;
 					disks;

@@ -91,19 +91,19 @@ let ignore_bool (_: bool) = ()
 let ignore_int (_: int) = ()
 
 (* Recode an incoming string as valid UTF-8 *)
-let utf8_recode str = 
+let utf8_recode str =
 	let out_encoding = `UTF_8 in
 	let b = Buffer.create 1024 in
 	let dst = `Buffer b in
 	let src = `String str in
 	let rec loop d e =
-		match Uutf.decode d with 
-		| `Uchar _ as u -> ignore (Uutf.encode e u); loop d e 
+		match Uutf.decode d with
+		| `Uchar _ as u -> ignore (Uutf.encode e u); loop d e
 		| `End -> ignore (Uutf.encode e `End)
-		|`Malformed _ -> ignore (Uutf.encode e (`Uchar Uutf.u_rep)); loop d e 
+		|`Malformed _ -> ignore (Uutf.encode e (`Uchar Uutf.u_rep)); loop d e
 		| `Await -> assert false
 	in
-	let d = Uutf.decoder src in 
+	let d = Uutf.decoder src in
 	let e = Uutf.encoder out_encoding dst in
 	loop d e;
 	Buffer.contents b
@@ -148,7 +148,7 @@ end
 
 module Date = struct
 	type t = string
-	let of_float x = 
+	let of_float x =
 		let time = Unix.gmtime x in
 		Printf.sprintf "%04d%02d%02dT%02d:%02d:%02dZ"
 			(time.Unix.tm_year+1900)
@@ -171,7 +171,7 @@ module Unixext = struct
 	let mkdir_rec dir perm =
         let rec p_mkdir dir =
             let p_name = Filename.dirname dir in
-            if p_name <> "/" && p_name <> "." 
+            if p_name <> "/" && p_name <> "."
             then p_mkdir p_name;
             try Unix.mkdir dir perm with Unix.Unix_error (Unix.EEXIST, _, _) -> () in
         p_mkdir dir
@@ -242,16 +242,16 @@ module Unixext = struct
 
 	(** [fd_blocks_fold block_size f start fd] folds [f] over blocks (strings)
 		from the fd [fd] with initial value [start] *)
-	let fd_blocks_fold block_size f start fd = 
+	let fd_blocks_fold block_size f start fd =
 		let block = String.create block_size in
-		let rec fold acc = 
+		let rec fold acc =
 			let n = Unix.read fd block 0 block_size in
 			(* Consider making the interface explicitly use Substrings *)
 			let s = if n = block_size then block else String.sub block 0 n in
 			if n = 0 then acc else fold (f acc s) in
 		fold start
 
-	let buffer_of_fd fd = 
+	let buffer_of_fd fd =
 		fd_blocks_fold 1024 (fun b s -> Buffer.add_string b s; b) (Buffer.create 1024) fd
 
 	let buffer_of_file file_path = with_file file_path [ Unix.O_RDONLY ] 0 buffer_of_fd
@@ -524,7 +524,7 @@ module TypedTable = functor(I: ITEM) -> struct
 	let remove (k: I.key) =
                 let path = k |> I.key |> of_key |> String.concat "/" in
                 debug "TypedTable: Removing %s" path;
-		if not(exists k) then begin	
+		if not(exists k) then begin
 			debug "Key %s does not exist" path;
 			raise (Does_not_exist(I.namespace, path))
 		end else delete k
@@ -562,7 +562,7 @@ let unplugged_vbd = {
     qos_target = None;
     backend_present = None;
 }
- 
+
 let unplugged_vif = {
      Vif.active = false;
      plugged = false;
@@ -577,12 +577,12 @@ let unplugged_vgpu = {
 	Vgpu.emulator_pid = None;
 }
 
-let remap_vdi vdi_map = function 
-	| Xenops_interface.VDI vdi -> 
-		if List.mem_assoc vdi vdi_map 
+let remap_vdi vdi_map = function
+	| Xenops_interface.VDI vdi ->
+		if List.mem_assoc vdi vdi_map
 		then (debug "Remapping VDI: %s -> %s" vdi (List.assoc vdi vdi_map); VDI (List.assoc vdi vdi_map))
-		else VDI vdi 
-	| x -> x 
+		else VDI vdi
+	| x -> x
 
 let remap_vif vif_map vif =
 	let open Xenops_interface in
@@ -597,12 +597,12 @@ let strip x =
 	else x
 let get_network_backend () =
 	try
-		Unixext.string_of_file !Path.network_conf
+		Unixext.string_of_file !Xpath.network_conf
 	|>  strip
 	|>  Stdext.Xstringext.String.split ' '
 	|>  List.hd
 	with _ ->
-		failwith (Printf.sprintf "Failed to read network backend from: %s" !Path.network_conf)
+		failwith (Printf.sprintf "Failed to read network backend from: %s" !Xpath.network_conf)
 
 let _sys_hypervisor_type = "/sys/hypervisor/type"
 let _sys_hypervisor_version_major = "/sys/hypervisor/version/major"

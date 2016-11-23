@@ -41,7 +41,7 @@ module Domain = struct
 		vgpus: Vgpu.t list;
 		xsdata: (string * string) list;
 		last_create_time: float;
-	} with rpc
+	} [@@deriving rpc]
 end
 
 module DB = TypedTable(struct
@@ -128,20 +128,20 @@ let destroy_nolock vm () =
 let build_nolock vm vbds vifs vgpus extras () =
 	debug "Domain.build vm=%s" vm.Vm.id;
 	debug "setting built <- true";
-	DB.write vm.Vm.id { DB.read_exn vm.Vm.id with Domain.built = true }
+ DB.write vm.Vm.id { (DB.read_exn vm.Vm.id) with Domain.built = true }
 
 let create_device_model_nolock vm () =
 	debug "Domain.create_device_model vm=%s" vm.Vm.id;
-	DB.write vm.Vm.id { DB.read_exn vm.Vm.id with Domain.qemu_created = true }
+ DB.write vm.Vm.id { (DB.read_exn vm.Vm.id) with Domain.qemu_created = true }
 
 let destroy_device_model_nolock vm () =
 	debug "Domain.destroy_device_model vm=%s" vm.Vm.id;
 	if DB.exists vm.Vm.id
-	then DB.write vm.Vm.id { DB.read_exn vm.Vm.id with Domain.qemu_created = false }
+ then DB.write vm.Vm.id { (DB.read_exn vm.Vm.id) with Domain.qemu_created = false }
 	else warn "Domain.destroy_device_model vm=%s: no device model exists" vm.Vm.id
 
 let request_shutdown_nolock vm reason () =
-	DB.write vm.Vm.id { DB.read_exn vm.Vm.id with Domain.domain_action_request =
+  DB.write vm.Vm.id { (DB.read_exn vm.Vm.id) with Domain.domain_action_request =
 			Some (match reason with
 				| Halt | PowerOff -> Needs_poweroff
 				| Reboot -> Needs_reboot
@@ -151,10 +151,10 @@ let request_shutdown_nolock vm reason () =
 	true
 
 let save_nolock vm _ data () =
-	DB.write vm.Vm.id { DB.read_exn vm.Vm.id with Domain.suspended = true }
+  DB.write vm.Vm.id { (DB.read_exn vm.Vm.id) with Domain.suspended = true }
 
 let restore_nolock vm vbds vifs data extras () =
-	DB.write vm.Vm.id { DB.read_exn vm.Vm.id with Domain.built = true }
+  DB.write vm.Vm.id { (DB.read_exn vm.Vm.id) with Domain.built = true }
 
 let do_pause_unpause_nolock vm paused () =
 	let d = DB.read_exn vm.Vm.id in
@@ -169,13 +169,13 @@ let do_set_xsdata_nolock vm xsdata () =
 let do_set_vcpus_nolock vm n () =
 	let d = DB.read_exn vm.Vm.id in
 	if not d.Domain.built || (d.Domain.hvm && not(d.Domain.qemu_created))
-	then raise (Domain_not_built)	
+	then raise (Domain_not_built)
 	else DB.write vm.Vm.id { d with Domain.vcpus = n }
 
 let do_set_shadow_multiplier_nolock vm m () =
 	let d = DB.read_exn vm.Vm.id in
 	if not d.Domain.built || (d.Domain.hvm && not(d.Domain.qemu_created))
-	then raise (Domain_not_built)	
+	then raise (Domain_not_built)
 	else DB.write vm.Vm.id { d with Domain.shadow_multiplier = m }
 
 let do_set_memory_dynamic_range_nolock vm min max () =
@@ -271,7 +271,7 @@ let vbd_state vm vbd () =
 				}
 			| [] -> unplugged_vbd
 			| _ -> assert false (* at most one *)
-				
+
 
 let vif_state vm vif () =
 	if not (DB.exists vm)

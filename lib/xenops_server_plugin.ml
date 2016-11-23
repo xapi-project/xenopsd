@@ -20,8 +20,8 @@ type domain_action_request =
 	| Needs_poweroff
 	| Needs_reboot
 	| Needs_suspend
-	| Needs_crashdump	
-with rpc
+	| Needs_crashdump
+[@@deriving rpc]
 
 type device_action_request =
 	| Needs_unplug
@@ -33,7 +33,7 @@ type shutdown_request =
 	| PowerOff
 	| S3Suspend
 	| Suspend
-with rpc
+[@@deriving rpc]
 let string_of_shutdown_request x = x |> rpc_of_shutdown_request |> Jsonrpc.to_string
 
 let test = Updates.empty
@@ -41,12 +41,12 @@ let string_of_disk d = d |> rpc_of_disk |> Jsonrpc.to_string
 type data =
 	| Disk of disk
 	| FD of Unix.file_descr
-with rpc
+[@@deriving rpc]
 let string_of_data x = x |> rpc_of_data |> Jsonrpc.to_string
 
 type flag =
 	| Live
-with rpc
+[@@deriving rpc]
 let string_of_flag x = x |> rpc_of_flag |> Jsonrpc.to_string
 let string_of_flag = function
 	| Live -> "Live"
@@ -139,7 +139,7 @@ module type S = sig
 		val get_state: Vm.id -> Vgpu.t -> Vgpu.state
 	end
 	module UPDATES : sig
-		val get: Updates.id option -> int option -> Dynamic.barrier list * Dynamic.id list * Updates.id 
+		val get: Updates.id option -> int option -> Dynamic.barrier list * Dynamic.id list * Updates.id
 	end
 	module DEBUG : sig
 		val trigger: string -> string list -> unit
