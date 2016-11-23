@@ -100,7 +100,7 @@ let doc = String.concat "\n" [
 	"Xenopsd looks after a set of Xen domains, performing lifecycle operations including start/shutdown/migrate. A system may run multiple xenopsds, each looking after a different set of VMs. Xenopsd will always ignore domains that it hasn't been asked to manage. There are multiple xenopsd *backends*, including 'xc': which uses libxc directly and 'xenlight': which uses the new Xen libxl library (recommended).";
 ]
 
-       
+
 
 let configure ?(specific_options=[]) ?(specific_essential_paths=[]) ?(specific_nonessential_paths=[]) () =
 	Debug.set_facility Syslog.Local5;
@@ -108,9 +108,9 @@ let configure ?(specific_options=[]) ?(specific_essential_paths=[]) ?(specific_n
 	debug "xenopsd version %d.%d starting" major_version minor_version;
 
 	let options = options @ specific_options in
-	let resources = Path.make_resources
-		~essentials:(Path.essentials @ specific_essential_paths)
-		~nonessentials:(Path.nonessentials @ specific_nonessential_paths) in
+	let resources = Xpath.make_resources
+		~essentials:(Xpath.essentials @ specific_essential_paths)
+		~nonessentials:(Xpath.nonessentials @ specific_nonessential_paths) in
 	match Xcp_service.configure2
 		~name:(Filename.basename Sys.argv.(0))
 		~version:Version.version
@@ -148,7 +148,7 @@ let main backend =
 
 	Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   Sys.set_signal Sys.sigterm (Sys.Signal_handle signal_handler);
-  
+
 
 	Xenops_utils.set_fs_backend
 		(Some (if !persist

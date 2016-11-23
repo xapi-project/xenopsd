@@ -107,10 +107,10 @@ let get_private_key ~xs device x =
 		raise e
 
 let safe_rm ~xs path =
-  try 
+  try
     debug "xenstore-rm %s" path;
     xs.Xs.rm path
-  with _ -> debug "Failed to xenstore-rm %s; continuing" path 
+  with _ -> debug "Failed to xenstore-rm %s; continuing" path
 
 (* Helper function to delete the frontend, backend and error trees for a device.
    This must only be done after synchronising with the hotplug scripts.
@@ -137,7 +137,7 @@ let can_surprise_remove ~xs (x: device) =
 	with _ -> false
 
 (** Checks whether the supplied device still exists (ie hasn't been deleted) *)
-let exists ~xs (x: device) = 
+let exists ~xs (x: device) =
   let backend_stub = backend_path_of_device ~xs x in
   try
     ignore_string(xs.Xs.read backend_stub);
@@ -218,7 +218,7 @@ let hard_shutdown_complete ~xs (x: device) =
 	then backend_closed ~xs x
 	else unplug_watch ~xs x
 
-let hard_shutdown (task: Xenops_task.t) ~xs (x: device) = 
+let hard_shutdown (task: Xenops_task.t) ~xs (x: device) =
 	hard_shutdown_request ~xs x;
 
 	let (_: bool) = cancellable_watch (Device x) [ hard_shutdown_complete ~xs x ] [ ] task ~xs ~timeout:!Xenopsd.hotplug_timeout () in
@@ -231,7 +231,7 @@ let hard_shutdown (task: Xenops_task.t) ~xs (x: device) =
    When the watch fires, call a predicate function and look for an error node.
    If an error node appears, throw Device_error. If the predicate returns true then
    return unit. If the timeout expires throw Device_disconnect_timeout. *)
-let wait_for_error_or ~xs ?(timeout=Hotplug.hotplug_timeout) doc predicate otherpath domid kind devid = 
+let wait_for_error_or ~xs ?(timeout=Hotplug.hotplug_timeout) doc predicate otherpath domid kind devid =
 	let doc' = Printf.sprintf "%s (timeout = %f; %s)" doc timeout (print_device domid kind devid) in
   	let errorpath = error_node domid kind devid in
 	debug "Device.wait_for_error_or %s (watching [ %s; %s ])" doc' otherpath errorpath;
@@ -397,7 +397,7 @@ let shutdown_request_clean_shutdown_wait (task: Xenops_task.t) ~xs ~ignore_trans
 		raise (Device_error (x, error))
 	end
 
-let shutdown_request_hard_shutdown (task: Xenops_task.t) ~xs (x: device) = 
+let shutdown_request_hard_shutdown (task: Xenops_task.t) ~xs (x: device) =
 	debug "Device.Vbd.hard_shutdown %s" (string_of_device x);
 	request_shutdown ~xs x true; (* force *)
 
@@ -445,7 +445,7 @@ let release (task: Xenops_task.t) ~xc ~xs (x: device) =
 	if !Xenopsd.run_hotplug_scripts
 	then Hotplug.run_hotplug_script x [ "remove" ];
 
-	(* As for add above, if the frontend is in dom0, we can wait for the frontend 
+	(* As for add above, if the frontend is in dom0, we can wait for the frontend
 	 * to unplug as well as the backend. CA-13506 *)
 	if x.frontend.domid = 0 then Hotplug.wait_for_frontend_unplug task ~xs x
 
@@ -484,7 +484,7 @@ let add_async ~xs ~hvm x domid =
 		| None ->
 			make (free_device ~xs hvm domid) in
 	let devid = to_xenstore_key device_number in
-	let device = 
+	let device =
 	  let backend = { domid = x.backend_domid; kind = x.kind; devid = devid }
 	  in  device_of_backend backend domid
 	in
@@ -721,7 +721,7 @@ let clean_shutdown = Generic.clean_shutdown
 
 let hard_shutdown = Generic.hard_shutdown
 
-let set_carrier ~xs (x: device) carrier = 
+let set_carrier ~xs (x: device) carrier =
 	debug "Device.Vif.set_carrier %s <- %b" (string_of_device x) carrier;
 	let disconnect_path = disconnect_path_of_device ~xs x in
 	xs.Xs.write disconnect_path (if carrier then "0" else "1")
@@ -827,7 +827,7 @@ let vncterm_statefile pid = sprintf "/var/xen/vncterm/%d/vncterm.statefile" pid
 let get_statefile ~xs domid =
 	match pid ~xs domid with
 	| None -> None
-	| Some pid -> 
+	| Some pid ->
 		  let filename = vncterm_statefile pid in
 		  if Sys.file_exists filename then
 			  Some filename
@@ -836,7 +836,7 @@ let get_statefile ~xs domid =
 
 let save ~xs domid =
 	match pid ~xs domid with
-	| Some pid -> 
+	| Some pid ->
 		  Unix.kill pid Sys.sigusr1;
 		  let filename = vncterm_statefile pid in
 		  let delay = 10. in
@@ -1052,7 +1052,7 @@ let bind_to_i915 devstr =
 		fun loaded line ->
 			loaded || match Stdext.Xstringext.String.split ' ' line with "i915" :: _ -> true | _ -> false
 	) false "/proc/modules" in
-	if not is_loaded then ignore (Forkhelpers.execute_command_get_output !Path.modprobe ["i915"]);
+	if not is_loaded then ignore (Forkhelpers.execute_command_get_output !Xpath.modprobe ["i915"]);
 	match get_driver devstr	with
 	| None -> write_string_to_file (Filename.concat sysfs_i915 "bind") devstr
 	| Some (Supported I915) -> ()
@@ -1073,7 +1073,7 @@ let unbind devstr driver =
 let unbind_from_i915 devstr =
 	unbind devstr (Supported I915);
 	let (_:string * string) =
-		Forkhelpers.execute_command_get_output !Path.rmmod ["i915"] in ()
+		Forkhelpers.execute_command_get_output !Xpath.rmmod ["i915"] in ()
 
 let procfs_nvidia = "/proc/driver/nvidia/gpus"
 
@@ -1201,10 +1201,10 @@ let hard_shutdown (task: Xenops_task.t) ~xs (x: device) =
 let device_model_state_path xs be_domid fe_domid =
   Printf.sprintf "%s/device-model/%d/state" (xs.Xs.getdomainpath be_domid) fe_domid
 
-let signal_device_model ~xs domid cmd parameter = 
+let signal_device_model ~xs domid cmd parameter =
 	debug "Device.Pci.signal_device_model domid=%d cmd=%s param=%s" domid cmd parameter;
 	let be_domid = 0 in (* XXX: assume device model is in domain 0 *)
-	let be_path = xs.Xs.getdomainpath be_domid in 
+	let be_path = xs.Xs.getdomainpath be_domid in
 	(* Currently responses go in this global place. Blank it to prevent request/response/request confusion *)
 	xs.Xs.rm (device_model_state_path xs be_domid domid);
 
@@ -1213,7 +1213,7 @@ let signal_device_model ~xs domid cmd parameter =
 				       Printf.sprintf "device-model/%d/parameter" domid, parameter ];
 	)
 
-let wait_device_model (task: Xenops_task.t) ~xs domid = 
+let wait_device_model (task: Xenops_task.t) ~xs domid =
   let be_domid = 0 in
   let path = device_model_state_path xs be_domid domid in
   let watch = Watch.value_to_appear path |> Watch.map (fun _ -> ()) in
@@ -1230,7 +1230,7 @@ let wait_device_model (task: Xenops_task.t) ~xs domid =
   end
 
 (* Return a list of PCI devices *)
-let list ~xs domid = 
+let list ~xs domid =
 	(* replace the sort index with the default '0' -- XXX must figure out whether this matters to anyone *)
 	List.map (fun (_, y) -> (0, y)) (read_pcidir ~xs domid)
 
@@ -1453,23 +1453,23 @@ let oem_features_path ~qemu_domid domid = sprintf "/local/domain/%d/device-model
 let inject_sci_path ~qemu_domid domid = sprintf "/local/domain/%d/device-model/%d/inject-sci" qemu_domid domid
 
 let xenclient_specific ~xs info ~qemu_domid domid =
-  (match info.power_mgmt with 
+  (match info.power_mgmt with
     | Some i -> begin
-	try 
+	try
 	  if (Unix.stat "/proc/acpi/battery").Unix.st_kind == Unix.S_DIR then
 	    xs.Xs.write (power_mgmt_path ~qemu_domid domid) (string_of_int i);
 	with _ -> ()
       end
     | None -> ());
-  
-  (match info.oem_features with 
+
+  (match info.oem_features with
     | Some i -> xs.Xs.write (oem_features_path ~qemu_domid domid) (string_of_int i);
     | None -> ());
-  
-  (match info.inject_sci with 
+
+  (match info.inject_sci with
     | Some i -> xs.Xs.write (inject_sci_path ~qemu_domid domid) (string_of_int i)
     | None -> ());
-  
+
   let sound_options =
     match info.sound with
       | None        -> []
@@ -1477,9 +1477,9 @@ let xenclient_specific ~xs info ~qemu_domid domid =
   in
 
   ["-videoram"; string_of_int info.video_mib;
-   "-M"; (if info.hvm then "xenfv" else "xenpv")] 
+   "-M"; (if info.hvm then "xenfv" else "xenpv")]
   @ sound_options
-   
+
 let signal (task: Xenops_task.t) ~xs ~qemu_domid ~domid ?wait_for ?param cmd =
 	let cmdpath = device_model_path ~qemu_domid domid in
 	Xs.transaction xs (fun t ->
@@ -1540,7 +1540,7 @@ let cmdline_of_disp info =
 	in
 	let disp_options, wait_for_port =
 		match info.disp with
-		| NONE -> 
+		| NONE ->
 			([], false)
 		| SDL (opts, x11name) ->
 			([], false)
@@ -1567,7 +1567,7 @@ let cmdline_of_info info restore domid =
 		| _, [] -> [] (* return a short list *)
 		| n, x :: xs -> x :: (take (n - 1) xs) in
 	let nics = take max_emulated_nics nics in
-	
+
 	(* qemu need a different id for every vlan, or things get very bad *)
 	let nics' =
 		if List.length nics > 0 then
@@ -1781,18 +1781,16 @@ let stop ~xs ~qemu_domid domid  =
 
 end (* End of module Dm *)
 
-let get_vnc_port ~xs domid = 
+let get_vnc_port ~xs domid =
 	(* Check whether a qemu exists for this domain *)
 	let qemu_exists = Qemu.is_running ~xs domid in
 	if qemu_exists
 	then Dm.get_vnc_port ~xs domid
 	else PV_Vnc.get_vnc_port ~xs domid
 
-let get_tc_port ~xs domid = 
+let get_tc_port ~xs domid =
 	(* Check whether a qemu exists for this domain *)
 	let qemu_exists = Qemu.is_running ~xs domid in
 	if qemu_exists
 	then Dm.get_tc_port ~xs domid
 	else PV_Vnc.get_tc_port ~xs domid
-
-
