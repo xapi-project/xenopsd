@@ -12,7 +12,7 @@
  * GNU Lesser General Public License for more details.
  *)
 
-let specific_essential_paths = Path.hvm_guests @ Path.network_configuration
+let specific_essential_paths = Xpath.hvm_guests @ Xpath.network_configuration
 
 (* Start the program with the libvirt backend *)
 let _ =

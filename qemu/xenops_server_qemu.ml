@@ -35,7 +35,7 @@ module Domain = struct
 		active_vifs: Vif.id list;
 		pcis: Pci.t list;
 		last_create_time: float;
-	} with rpc
+	} [@@deriving rpc]
 end
 
 module DB = TypedTable(struct
@@ -334,8 +334,8 @@ module VM = struct
 			if power_state = Running then begin
 				(* XXX: stat the file first *)
 				let path = Filename.concat Qemu.vnc_dir vm.Vm.id in
-				debug "%s %s %s" !Path.chgrp !Qemu_path.sockets_group path;
-				ignore(Forkhelpers.execute_command_get_output !Path.chgrp [!Qemu_path.sockets_group; path]);
+				debug "%s %s %s" !Xpath.chgrp !Qemu_path.sockets_group path;
+				ignore(Forkhelpers.execute_command_get_output !Xpath.chgrp [!Qemu_path.sockets_group; path]);
 				Unix.chmod path 0o0770;
 			end;
 			let domids =
