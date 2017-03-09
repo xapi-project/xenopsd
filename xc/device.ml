@@ -1525,7 +1525,7 @@ let cmdline_of_disp info =
 			List.flatten [base_opts; config_file_opt; priv_opt]
 		| Vgpu [{implementation = MxGPU mxgpu}] ->
 			[
-				"-mxgpu-fb-size"; Int64.to_string (Int64.div mxgpu.framebufferbytes 1_048_576L); (*MiBytes*)
+			  (*"-mxgpu-fb-size"; Int64.to_string (Int64.div mxgpu.framebufferbytes 1_048_576L); *) (*MiBytes - not currently used *)
 			  (*"-mxgpu-sched-level"; mxgpu.sched; *) (* String param for gim kernel-module but not currently used. *)
 			]
 		| Vgpu _ -> failwith "Unsupported vGPU configuration"
