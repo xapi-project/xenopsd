@@ -218,6 +218,7 @@ Executable xenopsd_xenlight_main
   Build$:             flag(xenlight)
   Custom:             true
   Install:            false
+  CCLib:              -L/lib64 -lxentoollog
   BuildDepends:
     xenlight,
     xentoollog,
