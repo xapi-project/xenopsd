@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: f77eced2757d5642f0895cf474ea6bf9)
+# DO NOT EDIT (digest: e800a8611f32f47fd611e494e897d02b)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -385,6 +385,11 @@ true: annot, bin_annot
 <libvirt/*.ml{,i,y}>: use_xenopsd
 <libvirt/xenops_libvirt_main.{native,byte}>: custom
 # Executable xenopsd_xenlight_main
+<xl/xenops_xl_main.{native,byte}>: oasis_executable_xenopsd_xenlight_main_cclib
+"xl/libxenopsd_xenlight_main_stubs.lib": oasis_executable_xenopsd_xenlight_main_cclib
+"xl/dllxenopsd_xenlight_main_stubs.dll": oasis_executable_xenopsd_xenlight_main_cclib
+"xl/libxenopsd_xenlight_main_stubs.a": oasis_executable_xenopsd_xenlight_main_cclib
+"xl/dllxenopsd_xenlight_main_stubs.so": oasis_executable_xenopsd_xenlight_main_cclib
 <xl/xenops_xl_main.{native,byte}>: oasis_executable_xenopsd_xenlight_main_byte
 <xl/*.ml{,i,y}>: oasis_executable_xenopsd_xenlight_main_byte
 "xl/fsync_stubs.c": oasis_executable_xenopsd_xenlight_main_byte

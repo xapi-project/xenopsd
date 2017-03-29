@@ -27,14 +27,14 @@ Flag simulator
   Default:            true
 
 
-# Support files for profiling 
+# Support files for profiling
 Library profiling
   CompiledObject:     best
   Path:               profiling
   Install:            false
   Findlibname:        profiling
   Modules:            Coverage
-  BuildDepends: 
+  BuildDepends:
 
 Library xenopsd
   CompiledObject:     best
@@ -42,7 +42,7 @@ Library xenopsd
   Findlibname:        xenopsd
   ByteOpt:            -warn-error +a
   NativeOpt:          -warn-error +a
-  Modules:            
+  Modules:
     Suspend_image,
     Cancellable_subprocess,
     Bootloader,
@@ -116,8 +116,8 @@ Executable set_domain_uuid
   MainIs:             set_domain_uuid.ml
   Install:            false
   BuildDepends:
-    xenctrl, 
-    uuidm, 
+    xenctrl,
+    uuidm,
     cmdliner,
     profiling
 
@@ -129,7 +129,7 @@ Executable suspend_image_viewer
   MainIs:             suspend_image_viewer.ml
   Install:            false
   BuildDepends:
-    xenopsd, 
+    xenopsd,
     cmdliner,
     profiling
 
@@ -218,6 +218,7 @@ Executable xenopsd_xenlight_main
   Build$:             flag(xenlight)
   Custom:             true
   Install:            false
+  CCLib:              -L/lib64 -lxentoollog
   BuildDepends:
     xenlight,
     xentoollog,
