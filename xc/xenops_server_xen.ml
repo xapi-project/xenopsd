@@ -1466,7 +1466,7 @@ module VM = struct
 			)
 		| FD fd -> f fd
 
-	let save task progress_callback vm flags data =
+	let save task progress_callback vm flags data vgpu_data =
 		let flags' =
 			List.map
 				(function
@@ -1482,7 +1482,8 @@ module VM = struct
 				with_data ~xc ~xs task data true
 					(fun fd ->
 						let vm_str = Vm.sexp_of_t vm |> Sexplib.Sexp.to_string in
-						Domain.suspend task ~xc ~xs ~hvm ~progress_callback ~qemu_domid (choose_xenguest vm.Vm.platformdata) vm_str domid fd flags'
+						let vgpu_fd = match vgpu_data with Some (FD fd) -> Some fd | _ -> None in
+						Domain.suspend task ~xc ~xs ~hvm ~progress_callback ~qemu_domid (choose_xenguest vm.Vm.platformdata) vm_str domid fd vgpu_fd flags'
 							(fun () ->
 								if not(request_shutdown task vm Suspend 30.)
 								then raise (Failed_to_acknowledge_shutdown_request);
