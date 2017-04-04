@@ -96,7 +96,8 @@ type atomic =
 	| VM_shutdown_domain of (Vm.id * shutdown_request * float)
 	| VM_s3suspend of Vm.id
 	| VM_s3resume of Vm.id
-	| VM_save of (Vm.id * flag list * data)
+	| VM_save of (Vm.id * flag list * data * data option)
+		(** takes suspend data, plus optionally vGPU state data *)
 	| VM_restore of (Vm.id * data)
 	| VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
 	| VM_save_vgpu of (Vm.id * Vgpu.id * data)
@@ -957,7 +958,7 @@ let rec atomics_of_operation = function
 	| VM_suspend (id, data) ->
 		[
 			VM_hook_script(id, Xenops_hooks.VM_pre_suspend, Xenops_hooks.reason__suspend);
-			VM_save (id, [], data);
+			VM_save (id, [], data, None);
 			VM_hook_script(id, Xenops_hooks.VM_pre_destroy, Xenops_hooks.reason__suspend)
 		] @ (atomics_of_operation (VM_shutdown (id, None))
 		) @ [
@@ -1271,9 +1272,9 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			debug "VM.s3resume %s" id;
 			B.VM.s3resume t (VM_DB.read_exn id);
 			VM_DB.signal id
-		| VM_save (id, flags, data) ->
+		| VM_save (id, flags, data, vgpu_data) ->
 			debug "VM.save %s" id;
-			B.VM.save t progress_callback (VM_DB.read_exn id) flags data
+			B.VM.save t progress_callback (VM_DB.read_exn id) flags data vgpu_data
 		| VM_restore (id, data) ->
 			debug "VM.restore %s" id;
 			if id |> VM_DB.exists |> not
@@ -1313,7 +1314,7 @@ and queue_atomics_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
 
 (* Used to divide up the progress (bar) amongst atomic operations *)
 let weight_of_atomic = function
-	| VM_save (_, _, _) -> 10.
+	| VM_save (_, _, _, _) -> 10.
 	| VM_restore (_, _) -> 10.
 	| _ -> 1.
 
@@ -1429,7 +1430,7 @@ and trigger_cleanup_after_failure_atom op t = match op with
 		| VM_shutdown_domain (id, _, _)
 		| VM_s3suspend id
 		| VM_s3resume id
-		| VM_save (id, _, _)
+		| VM_save (id, _, _, _)
 		| VM_restore (id, _)
 		| VM_save_vgpu (id, _, _)
 		| VM_restore_vgpu (id, _, _)
@@ -1549,8 +1550,15 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 
 					debug "Synchronisation point 1";
 
-					let save_vm_then_handshake () = (
-						let atom = VM_save (id, [ Live ], FD mem_fd) in
+					let save_vm_then_handshake ?vgpu () = (
+						let atom = match vgpu with
+							| Some (vgpu_id, vgpu_fd) ->
+								let save = VM_save (id, [ Live ], FD mem_fd, Some (FD vgpu_fd)) in
+								let save_vgpu = VM_save_vgpu (id, vgpu_id, FD vgpu_fd) in
+								Parallel (id, Printf.sprintf "VM.save+save_vgpu vm=%s" id, [save; save_vgpu])
+							| None ->
+								VM_save (id, [ Live ], FD mem_fd, None)
+						in
 						perform_atomics [atom] t;
 						debug "Synchronisation point 2";
 
@@ -1570,19 +1578,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 						let vgpu_url = make_url "/migrate-vgpu/" (VGPU_DB.string_of_id vgpu_id) in
 						Open_uri.with_open_uri vgpu_url (fun vgpu_fd ->
 							do_request vgpu_fd [] vgpu_url;
-							debug "Synchronisation point 1.5";
-
-							perform_atomics [VM_save_vgpu (id, vgpu_id, FD vgpu_fd)] t;
-
-							(* Use mem_fd for all handshaking *)
-							begin match Handshake.recv mem_fd with
-								| Handshake.Success -> ()
-								| Handshake.Error msg ->
-									error "cannot transmit vgpu to host: %s" msg;
-									raise (Internal_error msg)
-							end;
-
-							save_vm_then_handshake ()
+							save_vm_then_handshake ~vgpu:(vgpu_id, vgpu_fd) ()
 						)
 					| _ -> raise (Internal_error "Migration of a VM with more than one VGPU is not supported.")
 				);
@@ -2186,8 +2182,7 @@ module VM = struct
 					end else
 						Some (queue_operation dbg vm_id op)
 				in
-				Opt.iter (fun t -> t |> Xenops_client.wait_for_task dbg |> ignore) task;
-				Xenops_migrate.(Handshake.send transferred_fd Handshake.Success)
+				Opt.iter (fun t -> t |> Xenops_client.wait_for_task dbg |> ignore) task
 			| None ->
 				let headers = Cohttp.Header.of_list [
 					"User-agent", "xenopsd"
