@@ -146,10 +146,10 @@ end = struct
     (* When a thread is not actively processing a queue, items are placed here: *)
     let default = { queues = Queues.create (); mutex = Mutex.create () }
     (* We create another queue only for Parallel atoms so as to avoid a situation where
-       	   Parallel atoms can not progress because all the workers available for the
-       	   default queue are used up by other operations depending on further Parallel
-       	   atoms, creating a deadlock.
-       	 *)
+       Parallel atoms can not progress because all the workers available for the
+       default queue are used up by other operations depending on further Parallel
+       atoms, creating a deadlock.
+    *)
     let parallel_queues = { queues = Queues.create (); mutex = Mutex.create () }
 
     (* When a thread is actively processing a queue, items are redirected to a thread-private queue *)
@@ -170,8 +170,8 @@ end = struct
 
     let pop t () =
       (* We must prevent worker threads all calling Queues.pop before we've
-         		   successfully put the redirection in place. Otherwise we end up with
-         		   parallel threads operating on the same VM. *)
+         successfully put the redirection in place. Otherwise we end up with
+         parallel threads operating on the same VM. *)
       Mutex.execute t.mutex
         (fun () ->
            let tag, item = Queues.pop t.queues in
@@ -339,8 +339,8 @@ end = struct
       Mutex.execute m
         (fun () ->
            (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
-              				   are only interested in comparing the equality of their static references
-              				 *)
+              are only interested in comparing the equality of their static references
+           *)
            List.map (fun w -> w.Worker.redirector == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
         )
 
@@ -351,8 +351,8 @@ end = struct
       List.fold_left
         (fun acc w ->
            (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
-              				   are only interested in comparing the equality of their static references
-              				 *)
+              are only interested in comparing the equality of their static references
+           *)
            if w.Worker.redirector == queues && Worker.get_state w = Worker.Shutdown then begin
              Worker.join w;
              acc
