@@ -468,8 +468,11 @@ module Queues = struct
       )
 end
 
+type item = operation * Xenops_task.task_handle
+let describe_item (op, _) = string_of_operation op
+
 module Redirector = struct
-  type t = { queues: (operation * Xenops_task.task_handle) Queues.t; mutex: Mutex.t }
+  type t = { queues: item Queues.t; mutex: Mutex.t }
 
   (* When a thread is not actively processing a queue, items are placed here: *)
   let default = { queues = Queues.create (); mutex = Mutex.create () }
@@ -500,7 +503,7 @@ module Redirector = struct
          Mutex.execute m
            (fun () ->
               let q, redirected = if StringMap.mem tag !overrides then StringMap.find tag !overrides, true else t.queues, false in
-              debug "Queue.push %s onto %s%s:[ %s ]" (string_of_operation (fst item)) (if redirected then "redirected " else "") tag (String.concat ", " (List.rev (Queue.fold (fun acc (b, _) -> string_of_operation b :: acc) [] (Queues.get tag q))));
+              debug "Queue.push %s onto %s%s:[ %s ]" (describe_item item) (if redirected then "redirected " else "") tag (String.concat ", " (List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get tag q))));
 
               Queues.push_with_coalesce should_keep tag item q
            )
@@ -555,7 +558,7 @@ end
 module Worker = struct
   type state =
     | Idle
-    | Processing of (operation * Xenops_task.task_handle)
+    | Processing of item
     | Shutdown_requested
     | Shutdown
   type t = {
@@ -627,30 +630,31 @@ module Worker = struct
                t.shutdown_requested
              )) do
              Mutex.execute t.m (fun () -> t.state <- Idle);
-             let tag, queue, (op, item) = Redirector.pop redirector () in (* blocks here *)
-             let id = Xenops_task.id_of_handle item in
-             debug "Queue.pop returned %s" (string_of_operation op);
-             Mutex.execute t.m (fun () -> t.state <- Processing (op, item));
+             let tag, queue, item = Redirector.pop redirector () in (* blocks here *)
+             let (op, handle) = item in
+             let id = Xenops_task.id_of_handle handle in
+             debug "Queue.pop returned %s" (describe_item item);
+             Mutex.execute t.m (fun () -> t.state <- Processing item);
              begin
                try
-                 let t' = Xenops_task.to_interface_task item in
+                 let t' = Xenops_task.to_interface_task handle in
                  Debug.with_thread_associated
                    t'.Task.dbg
                    (fun () ->
-                      debug "Task %s reference %s: %s" id t'.Task.dbg (string_of_operation op);
-                      Xenops_task.run item
+                      debug "Task %s reference %s: %s" id t'.Task.dbg (describe_item item);
+                      Xenops_task.run handle
                    ) ()
                with e ->
                  debug "Queue caught: %s" (Printexc.to_string e)
              end;
              Redirector.finished redirector tag queue;
              (* The task must have succeeded or failed. *)
-             begin match Xenops_task.get_state item with
+             begin match Xenops_task.get_state handle with
                | Task.Pending _ ->
                  error "Task %s has been left in a Pending state" id;
                  let e = Internal_error "Task left in Pending state" in
                  let e = e |> exnty_of_exn |> Exception.rpc_of_exnty in
-                 Xenops_task.set_state item (Task.Failed e)
+                 Xenops_task.set_state handle (Task.Failed e)
                | _ -> ()
              end;
              TASK.signal id
@@ -687,6 +691,7 @@ module WorkerPool = struct
       task: task option;
     } [@@deriving rpc]
     type t = w list [@@deriving rpc]
+    let dump_task (_, task) = of_task task
     let make () =
       Mutex.execute m
         (fun () ->
@@ -694,7 +699,7 @@ module WorkerPool = struct
              (fun t ->
                 match Worker.get_state t with
                 | Worker.Idle -> { state = "Idle"; task = None }
-                | Worker.Processing (op, task) -> { state = Printf.sprintf "Processing %s" (string_of_operation op); task = Some (of_task task) }
+                | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (dump_task item) }
                 | Worker.Shutdown_requested -> { state = "Shutdown_requested"; task = None }
                 | Worker.Shutdown -> { state = "Shutdown"; task = None }
              ) !pool
