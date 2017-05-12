@@ -468,9 +468,6 @@ module Queues = struct
       )
 end
 
-type item = operation * Xenops_task.task_handle
-let describe_item (op, _) = string_of_operation op
-
 module TaskDump = struct
   type t = {
     id: string;
@@ -488,23 +485,33 @@ module TaskDump = struct
       subtasks = List.map (fun (name, state) -> name, state |> Task.rpc_of_state |> Jsonrpc.to_string) t'.Task.subtasks |> List.rev;
     }
 end
-let dump_task (_, handle) = TaskDump.(of_task handle  |> rpc_of_t)
 
-module Redirector = struct
-  type t = { queues: item Queues.t; mutex: Mutex.t }
+module Item = struct
+  type t = operation * Xenops_task.task_handle
+  let describe_item (op, _) = string_of_operation op
+  let dump_task (_, handle) = TaskDump.(of_task handle  |> rpc_of_t)
 
-  (* When a thread is not actively processing a queue, items are placed here: *)
-  let default = { queues = Queues.create (); mutex = Mutex.create () }
-  (* We create another queue only for Parallel atoms so as to avoid a situation where
-     	   Parallel atoms can not progress because all the workers available for the
-     	   default queue are used up by other operations depending on further Parallel
-     	   atoms, creating a deadlock.
-     	 *)
-  let parallel_queues = { queues = Queues.create (); mutex = Mutex.create () }
+  let execute (op, handle) =
+    let id = Xenops_task.id_of_handle handle in
+    let t' = Xenops_task.to_interface_task handle in
+    Debug.with_thread_associated
+      t'.Task.dbg
+      (fun () ->
+         debug "Task %s reference %s: %s" id t'.Task.dbg (string_of_operation op);
+         Xenops_task.run handle
+      ) ()
 
-  (* When a thread is actively processing a queue, items are redirected to a thread-private queue *)
-  let overrides = ref StringMap.empty
-  let m = Mutex.create ()
+  let finally (_, handle) =
+    let id = Xenops_task.id_of_handle handle in
+    begin match Xenops_task.get_state handle with
+      | Task.Pending _ ->
+        error "Task %s has been left in a Pending state" id;
+        let e = Internal_error "Task left in Pending state" in
+        let e = e |> exnty_of_exn |> Exception.rpc_of_exnty in
+        Xenops_task.set_state handle (Task.Failed e)
+      | _ -> ()
+    end;
+    TASK.signal id
 
   let should_keep (op, _) prev = match op with
     | VM_check_state (_)
@@ -515,263 +522,303 @@ module Redirector = struct
       let prev' = List.map fst prev in
       not(List.mem op prev')
     | _ -> true
+end
 
-  let push t tag item =
-    Debug.with_thread_associated "queue"
-      (fun () ->
-         Mutex.execute m
-           (fun () ->
-              let q, redirected = if StringMap.mem tag !overrides then StringMap.find tag !overrides, true else t.queues, false in
-              debug "Queue.push %s onto %s%s:[ %s ]" (describe_item item) (if redirected then "redirected " else "") tag (String.concat ", " (List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get tag q))));
 
-              Queues.push_with_coalesce should_keep tag item q
-           )
-      ) ()
+module type Item = sig
+  type t
+  val describe_item : t -> string
+  val dump_task : t -> Rpc.t
+  val execute : t -> unit
+  val finally : t -> unit
+  val should_keep : t -> t list -> bool
+end
 
-  let pop t () =
-    (* We must prevent worker threads all calling Queues.pop before we've
-       		   successfully put the redirection in place. Otherwise we end up with
-       		   parallel threads operating on the same VM. *)
-    Mutex.execute t.mutex
-      (fun () ->
-         let tag, item = Queues.pop t.queues in
-         Mutex.execute m
-           (fun () ->
-              let q = Queues.create () in
-              Queues.transfer_tag tag t.queues q;
-              overrides := StringMap.add tag q !overrides;
-              (* All items with [tag] will enter queue [q] *)
-              tag, q, item
-           )
-      )
+module type Dump = sig
+  type t
+  val t_of_rpc : Rpc.t -> t
+  val rpc_of_t : t -> Rpc.t
+  val make : unit -> t
+end
 
-  let finished t tag queue =
-    Mutex.execute m
-      (fun () ->
-         Queues.transfer_tag tag queue t.queues;
-         overrides := StringMap.remove tag !overrides
-         (* All items with [tag] will enter the queues queue *)
-      )
+module Make(I:Item) : sig
+  type item = I.t
+  module Redirector :
+  sig
+    type t
+    module Dump : Dump
+    val default : t
+    val parallel_queues : t
+    val push : t -> string -> item -> unit
+  end
+  module WorkerPool :
+  sig
+    module Dump : Dump
+    val start : int -> unit
+    val set_size : int -> unit
+  end
+end = struct
+  open I
+  type item = I.t
+  module Redirector = struct
+    type t = { queues: item Queues.t; mutex: Mutex.t }
 
-  module Dump = struct
-    type q = {
-      tag: string;
-      items: string list
-    } [@@deriving rpc]
-    type t = q list [@@deriving rpc]
+    (* When a thread is not actively processing a queue, items are placed here: *)
+    let default = { queues = Queues.create (); mutex = Mutex.create () }
+    (* We create another queue only for Parallel atoms so as to avoid a situation where
+       	   Parallel atoms can not progress because all the workers available for the
+       	   default queue are used up by other operations depending on further Parallel
+       	   atoms, creating a deadlock.
+       	 *)
+    let parallel_queues = { queues = Queues.create (); mutex = Mutex.create () }
 
-    let make () =
+    (* When a thread is actively processing a queue, items are redirected to a thread-private queue *)
+    let overrides = ref StringMap.empty
+    let m = Mutex.create ()
+
+    let push t tag item =
+      Debug.with_thread_associated "queue"
+        (fun () ->
+           Mutex.execute m
+             (fun () ->
+                let q, redirected = if StringMap.mem tag !overrides then StringMap.find tag !overrides, true else t.queues, false in
+                debug "Queue.push %s onto %s%s:[ %s ]" (describe_item item) (if redirected then "redirected " else "") tag (String.concat ", " (List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get tag q))));
+
+                Queues.push_with_coalesce should_keep tag item q
+             )
+        ) ()
+
+    let pop t () =
+      (* We must prevent worker threads all calling Queues.pop before we've
+         		   successfully put the redirection in place. Otherwise we end up with
+         		   parallel threads operating on the same VM. *)
+      Mutex.execute t.mutex
+        (fun () ->
+           let tag, item = Queues.pop t.queues in
+           Mutex.execute m
+             (fun () ->
+                let q = Queues.create () in
+                Queues.transfer_tag tag t.queues q;
+                overrides := StringMap.add tag q !overrides;
+                (* All items with [tag] will enter queue [q] *)
+                tag, q, item
+             )
+        )
+
+    let finished t tag queue =
       Mutex.execute m
         (fun () ->
-           let one queue =
+           Queues.transfer_tag tag queue t.queues;
+           overrides := StringMap.remove tag !overrides
+           (* All items with [tag] will enter the queues queue *)
+        )
+
+    module Dump = struct
+      type q = {
+        tag: string;
+        items: string list
+      } [@@deriving rpc]
+      type t = q list [@@deriving rpc]
+
+      let make () =
+        Mutex.execute m
+          (fun () ->
+             let one queue =
+               List.map
+                 (fun t ->
+                    { tag = t; items = List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get t queue)) }
+                 ) (Queues.tags queue) in
+             List.concat (List.map one (default.queues :: parallel_queues.queues :: (List.map snd (StringMap.bindings !overrides))))
+          )
+
+    end
+  end
+
+  module Worker = struct
+    type state =
+      | Idle
+      | Processing of item
+      | Shutdown_requested
+      | Shutdown
+    type t = {
+      mutable state: state;
+      mutable shutdown_requested: bool;
+      m: Mutex.t;
+      c: Condition.t;
+      mutable t: Thread.t option;
+      redirector: Redirector.t;
+    }
+
+    let get_state_locked t =
+      if t.shutdown_requested
+      then Shutdown_requested
+      else t.state
+
+    let get_state t =
+      Mutex.execute t.m
+        (fun () ->
+           get_state_locked t
+        )
+
+    let join t =
+      Mutex.execute t.m
+        (fun () ->
+           assert (t.state = Shutdown);
+           Opt.iter Thread.join t.t
+        )
+
+    let is_active t =
+      Mutex.execute t.m
+        (fun () ->
+           match get_state_locked t with
+           | Idle | Processing _ -> true
+           | Shutdown_requested | Shutdown -> false
+        )
+
+    let shutdown t =
+      Mutex.execute t.m
+        (fun () ->
+           if not t.shutdown_requested then begin
+             t.shutdown_requested <- true;
+             true (* success *)
+           end else false
+        )
+
+    let restart t =
+      Mutex.execute t.m
+        (fun () ->
+           if t.shutdown_requested && t.state <> Shutdown then begin
+             t.shutdown_requested <- false;
+             true (* success *)
+           end else false
+        )
+
+    let create redirector =
+      let t = {
+        state = Idle;
+        shutdown_requested = false;
+        m = Mutex.create ();
+        c = Condition.create ();
+        t = None;
+        redirector = redirector;
+      } in
+      let thread = Thread.create
+          (fun () ->
+             while not(Mutex.execute t.m (fun () ->
+                 if t.shutdown_requested then t.state <- Shutdown;
+                 t.shutdown_requested
+               )) do
+               Mutex.execute t.m (fun () -> t.state <- Idle);
+               let tag, queue, item = Redirector.pop redirector () in (* blocks here *)
+               debug "Queue.pop returned %s" (describe_item item);
+               Mutex.execute t.m (fun () -> t.state <- Processing item);
+               begin
+                 try
+                   execute item
+                 with e ->
+                   debug "Queue caught: %s" (Printexc.to_string e)
+               end;
+               Redirector.finished redirector tag queue;
+               (* The task must have succeeded or failed. *)
+               finally item
+             done
+          ) () in
+      t.t <- Some thread;
+      t
+  end
+
+  module WorkerPool = struct
+
+    (* Store references to Worker.ts here *)
+    let pool = ref []
+    let m = Mutex.create ()
+
+
+    module Dump = struct
+      type w = {
+        state: string;
+        task: Rpc.t option;
+      } [@@deriving rpc]
+      type t = w list [@@deriving rpc]
+      let make () =
+        Mutex.execute m
+          (fun () ->
              List.map
                (fun t ->
-                  { tag = t; items = List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get t queue)) }
-               ) (Queues.tags queue) in
-           List.concat (List.map one (default.queues :: parallel_queues.queues :: (List.map snd (StringMap.bindings !overrides))))
-        )
+                  match Worker.get_state t with
+                  | Worker.Idle -> { state = "Idle"; task = None }
+                  | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (dump_task item) }
+                  | Worker.Shutdown_requested -> { state = "Shutdown_requested"; task = None }
+                  | Worker.Shutdown -> { state = "Shutdown"; task = None }
+               ) !pool
+          )
+    end
 
-  end
-end
-
-module Worker = struct
-  type state =
-    | Idle
-    | Processing of item
-    | Shutdown_requested
-    | Shutdown
-  type t = {
-    mutable state: state;
-    mutable shutdown_requested: bool;
-    m: Mutex.t;
-    c: Condition.t;
-    mutable t: Thread.t option;
-    redirector: Redirector.t;
-  }
-
-  let get_state_locked t =
-    if t.shutdown_requested
-    then Shutdown_requested
-    else t.state
-
-  let get_state t =
-    Mutex.execute t.m
-      (fun () ->
-         get_state_locked t
-      )
-
-  let join t =
-    Mutex.execute t.m
-      (fun () ->
-         assert (t.state = Shutdown);
-         Opt.iter Thread.join t.t
-      )
-
-  let is_active t =
-    Mutex.execute t.m
-      (fun () ->
-         match get_state_locked t with
-         | Idle | Processing (_, _) -> true
-         | Shutdown_requested | Shutdown -> false
-      )
-
-  let shutdown t =
-    Mutex.execute t.m
-      (fun () ->
-         if not t.shutdown_requested then begin
-           t.shutdown_requested <- true;
-           true (* success *)
-         end else false
-      )
-
-  let restart t =
-    Mutex.execute t.m
-      (fun () ->
-         if t.shutdown_requested && t.state <> Shutdown then begin
-           t.shutdown_requested <- false;
-           true (* success *)
-         end else false
-      )
-
-  let create redirector =
-    let t = {
-      state = Idle;
-      shutdown_requested = false;
-      m = Mutex.create ();
-      c = Condition.create ();
-      t = None;
-      redirector = redirector;
-    } in
-    let thread = Thread.create
-        (fun () ->
-           while not(Mutex.execute t.m (fun () ->
-               if t.shutdown_requested then t.state <- Shutdown;
-               t.shutdown_requested
-             )) do
-             Mutex.execute t.m (fun () -> t.state <- Idle);
-             let tag, queue, item = Redirector.pop redirector () in (* blocks here *)
-             let (op, handle) = item in
-             let id = Xenops_task.id_of_handle handle in
-             debug "Queue.pop returned %s" (describe_item item);
-             Mutex.execute t.m (fun () -> t.state <- Processing item);
-             begin
-               try
-                 let t' = Xenops_task.to_interface_task handle in
-                 Debug.with_thread_associated
-                   t'.Task.dbg
-                   (fun () ->
-                      debug "Task %s reference %s: %s" id t'.Task.dbg (describe_item item);
-                      Xenops_task.run handle
-                   ) ()
-               with e ->
-                 debug "Queue caught: %s" (Printexc.to_string e)
-             end;
-             Redirector.finished redirector tag queue;
-             (* The task must have succeeded or failed. *)
-             begin match Xenops_task.get_state handle with
-               | Task.Pending _ ->
-                 error "Task %s has been left in a Pending state" id;
-                 let e = Internal_error "Task left in Pending state" in
-                 let e = e |> exnty_of_exn |> Exception.rpc_of_exnty in
-                 Xenops_task.set_state handle (Task.Failed e)
-               | _ -> ()
-             end;
-             TASK.signal id
-           done
-        ) () in
-    t.t <- Some thread;
-    t
-end
-
-module WorkerPool = struct
-
-  (* Store references to Worker.ts here *)
-  let pool = ref []
-  let m = Mutex.create ()
-
-
-  module Dump = struct
-    type w = {
-      state: string;
-      task: Rpc.t option;
-    } [@@deriving rpc]
-    type t = w list [@@deriving rpc]
-    let make () =
+    (* Compute the number of active threads ie those which will continue to operate *)
+    let count_active queues =
       Mutex.execute m
         (fun () ->
-           List.map
-             (fun t ->
-                match Worker.get_state t with
-                | Worker.Idle -> { state = "Idle"; task = None }
-                | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (dump_task item) }
-                | Worker.Shutdown_requested -> { state = "Shutdown_requested"; task = None }
-                | Worker.Shutdown -> { state = "Shutdown"; task = None }
-             ) !pool
+           (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
+              				   are only interested in comparing the equality of their static references
+              				 *)
+           List.map (fun w -> w.Worker.redirector == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
         )
-  end
 
-  (* Compute the number of active threads ie those which will continue to operate *)
-  let count_active queues =
-    Mutex.execute m
-      (fun () ->
-         (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
-            				   are only interested in comparing the equality of their static references
-            				 *)
-         List.map (fun w -> w.Worker.redirector == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
-      )
+    let find_one queues f = List.fold_left (fun acc x -> acc || (x.Worker.redirector == queues && (f x))) false
 
-  let find_one queues f = List.fold_left (fun acc x -> acc || (x.Worker.redirector == queues && (f x))) false
+    (* Clean up any shutdown threads and remove them from the master list *)
+    let gc queues pool =
+      List.fold_left
+        (fun acc w ->
+           (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
+              				   are only interested in comparing the equality of their static references
+              				 *)
+           if w.Worker.redirector == queues && Worker.get_state w = Worker.Shutdown then begin
+             Worker.join w;
+             acc
+           end else w :: acc) [] pool
 
-  (* Clean up any shutdown threads and remove them from the master list *)
-  let gc queues pool =
-    List.fold_left
-      (fun acc w ->
-         (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
-            				   are only interested in comparing the equality of their static references
-            				 *)
-         if w.Worker.redirector == queues && Worker.get_state w = Worker.Shutdown then begin
-           Worker.join w;
-           acc
-         end else w :: acc) [] pool
+    let incr queues =
+      debug "Adding a new worker to the thread pool";
+      Mutex.execute m
+        (fun () ->
+           pool := gc queues !pool;
+           if not(find_one queues Worker.restart !pool)
+           then pool := (Worker.create queues) :: !pool
+        )
 
-  let incr queues =
-    debug "Adding a new worker to the thread pool";
-    Mutex.execute m
-      (fun () ->
-         pool := gc queues !pool;
-         if not(find_one queues Worker.restart !pool)
-         then pool := (Worker.create queues) :: !pool
-      )
+    let decr queues =
+      debug "Removing a worker from the thread pool";
+      Mutex.execute m
+        (fun () ->
+           pool := gc queues !pool;
+           if not(find_one queues Worker.shutdown !pool)
+           then debug "There are no worker threads left to shutdown."
+        )
 
-  let decr queues =
-    debug "Removing a worker from the thread pool";
-    Mutex.execute m
-      (fun () ->
-         pool := gc queues !pool;
-         if not(find_one queues Worker.shutdown !pool)
-         then debug "There are no worker threads left to shutdown."
-      )
-
-  let start size =
-    for i = 1 to size do
-      incr Redirector.default;
-      incr Redirector.parallel_queues
-    done
-
-  let set_size size =
-    let inner queues =
-      let active = count_active queues in
-      debug "XXX active = %d" active;
-      for i = 1 to max 0 (size - active) do
-        incr queues
-      done;
-      for i = 1 to max 0 (active - size) do
-        decr queues
+    let start size =
+      for i = 1 to size do
+        incr Redirector.default;
+        incr Redirector.parallel_queues
       done
-    in
-    inner Redirector.default;
-    inner Redirector.parallel_queues
+
+    let set_size size =
+      let inner queues =
+        let active = count_active queues in
+        debug "XXX active = %d" active;
+        for i = 1 to max 0 (size - active) do
+          incr queues
+        done;
+        for i = 1 to max 0 (active - size) do
+          decr queues
+        done
+      in
+      inner Redirector.default;
+      inner Redirector.parallel_queues
+  end
 end
+
+include Make(Item)
 
 (* Keep track of which VMs we're rebooting so we avoid transient glitches
    where the power_state becomes Halted *)
