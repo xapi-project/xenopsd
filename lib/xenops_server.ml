@@ -471,6 +471,25 @@ end
 type item = operation * Xenops_task.task_handle
 let describe_item (op, _) = string_of_operation op
 
+module TaskDump = struct
+  type t = {
+    id: string;
+    ctime: string;
+    dbg: string;
+    subtasks: (string * string) list;
+  } [@@deriving rpc]
+
+  let of_task t =
+    let t' = Xenops_task.to_interface_task t in
+    {
+      id = t'.Task.id;
+      ctime = t'.Task.ctime |> Date.of_float |> Date.to_string;
+      dbg = t'.Task.dbg;
+      subtasks = List.map (fun (name, state) -> name, state |> Task.rpc_of_state |> Jsonrpc.to_string) t'.Task.subtasks |> List.rev;
+    }
+end
+let dump_task (_, handle) = TaskDump.(of_task handle  |> rpc_of_t)
+
 module Redirector = struct
   type t = { queues: item Queues.t; mutex: Mutex.t }
 
@@ -672,26 +691,11 @@ module WorkerPool = struct
 
 
   module Dump = struct
-    type task = {
-      id: string;
-      ctime: string;
-      dbg: string;
-      subtasks: (string * string) list;
-    } [@@deriving rpc]
-    let of_task t =
-      let t' = Xenops_task.to_interface_task t in
-      {
-        id = t'.Task.id;
-        ctime = t'.Task.ctime |> Date.of_float |> Date.to_string;
-        dbg = t'.Task.dbg;
-        subtasks = List.map (fun (name, state) -> name, state |> Task.rpc_of_state |> Jsonrpc.to_string) t'.Task.subtasks |> List.rev;
-      }
     type w = {
       state: string;
-      task: task option;
+      task: Rpc.t option;
     } [@@deriving rpc]
     type t = w list [@@deriving rpc]
-    let dump_task (_, task) = of_task task
     let make () =
       Mutex.execute m
         (fun () ->
@@ -2635,7 +2639,7 @@ module Diagnostics = struct
     workers: WorkerPool.Dump.t;
     scheduler: Scheduler.Dump.dump;
     updates: Updates.Dump.dump;
-    tasks: WorkerPool.Dump.task list;
+    tasks: TaskDump.t list;
     vm_actions: (string * domain_action_request option) list;
   } [@@deriving rpc]
 
@@ -2645,7 +2649,7 @@ module Diagnostics = struct
       workers = WorkerPool.Dump.make ();
       scheduler = Scheduler.Dump.make scheduler;
       updates = Updates.Dump.make updates;
-      tasks = List.map WorkerPool.Dump.of_task (Xenops_task.list tasks);
+      tasks = List.map TaskDump.of_task (Xenops_task.list tasks);
       vm_actions = List.filter_map (fun id -> match VM_DB.read id with
           | Some vm -> Some (id, B.VM.get_domain_action_request vm)
           | None -> None
