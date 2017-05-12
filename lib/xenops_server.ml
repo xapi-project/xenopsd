@@ -556,7 +556,7 @@ module Redirector = struct
   module Dump = struct
     type q = {
       tag: string;
-      items: operation list
+      items: string list
     } [@@deriving rpc]
     type t = q list [@@deriving rpc]
 
@@ -566,7 +566,7 @@ module Redirector = struct
            let one queue =
              List.map
                (fun t ->
-                  { tag = t; items = List.rev (Queue.fold (fun acc (b, _) -> b :: acc) [] (Queues.get t queue)) }
+                  { tag = t; items = List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get t queue)) }
                ) (Queues.tags queue) in
            List.concat (List.map one (default.queues :: parallel_queues.queues :: (List.map snd (StringMap.bindings !overrides))))
         )
