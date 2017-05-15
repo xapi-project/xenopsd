@@ -190,7 +190,7 @@ let main backend =
        let (_: Thread.t) = Thread.create (fun () -> Xcp_service.serve_forever xml_server) () in
        ()
     ) ();
-  Xenops_server.WorkerPool.start !worker_pool_size;
+  Xenops_server.WorkerPool.set_size !worker_pool_size;
   while true do
     try
       Thread.delay 60.

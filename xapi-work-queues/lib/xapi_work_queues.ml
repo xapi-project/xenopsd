@@ -134,7 +134,6 @@ module type S = sig
   module WorkerPool :
   sig
     module Dump : Dump
-    val start : int -> unit
     val set_size : int -> unit
   end
 end
@@ -380,12 +379,6 @@ module Make(I:Item) = struct
            if not(find_one queues Worker.shutdown !pool)
            then debug "There are no worker threads left to shutdown."
         )
-
-    let start size =
-      for i = 1 to size do
-        incr Redirector.default;
-        incr Redirector.parallel_queues
-      done
 
     let set_size size =
       let inner queues =

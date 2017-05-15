@@ -53,7 +53,7 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
   let open Lib_worker in
   logf ctx `Info "Setting worker pool size to %d" workers;
   WorkerPool.set_size 0;
-  WorkerPool.start workers;
+  WorkerPool.set_size workers;
   let open Item in
 
   let running = {

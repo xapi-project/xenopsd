@@ -79,10 +79,6 @@ module type S = sig
   module WorkerPool :
   sig
     module Dump : Dump
-
-    (** [start n] Launches [n] additional worker threads *)
-    val start : int -> unit
-
     (** [set_size n] sets the worker pool size to [n]. *)
     val set_size : int -> unit
   end
