@@ -59,12 +59,6 @@ module Queues = struct
          StringMap.fold (fun x _ acc -> x :: acc) qs.qs []
       )
 
-  let get_last_tag qs =
-    Mutex.execute qs.m
-      (fun () ->
-         qs.last_tag
-      )
-
   let push_with_coalesce should_keep tag item qs =
     Mutex.execute qs.m
       (fun () ->

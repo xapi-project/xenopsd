@@ -61,10 +61,10 @@ module type S = sig
     val default : t
 
     (** We create another queue only for Parallel atoms so as to avoid a situation where
-        Parallel atoms can not progress because all the workers available for the
-        default queue are used up by other operations depending on further Parallel
-        atoms, creating a deadlock.
-    *)
+       Parallel atoms can not progress because all the workers available for the
+       default queue are used up by other operations depending on further Parallel
+       atoms, creating a deadlock.
+       *)
     val parallel_queues : t
 
     (** [push queue tag item] Pushes [item] at the end of [queue].

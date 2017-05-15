@@ -15,7 +15,7 @@ let flags = function
     in
     go ic ""
 
-let flags = flags ["ppx_deriving_rpc"; "ppx_sexp_conv"]
+let flags = flags ["ppx_deriving_rpc"]
 
 let coverage_rewriter =
   let is_coverage = try Unix.getenv "BISECT_ENABLE" = "YES" with Not_found -> false in
