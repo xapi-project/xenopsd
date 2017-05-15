@@ -300,7 +300,10 @@ end = struct
                end;
                Redirector.finished redirector tag queue;
                (* The task must have succeeded or failed. *)
-               finally item
+               try
+                 finally item
+               with e ->
+                 debug "Queue finally caught: %s" (Printexc.to_string e)
              done
           ) () in
       t.t <- Some thread;
