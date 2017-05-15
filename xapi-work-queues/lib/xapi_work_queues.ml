@@ -231,7 +231,7 @@ module Make(I:Item) = struct
     }
 
     let get_state_locked t =
-      if t.shutdown_requested
+      if t.shutdown_requested && t.state <> Shutdown
       then Shutdown_requested
       else t.state
 
