@@ -49,10 +49,17 @@ type running = {
   count: int ref;
 }
 
+open Lib_worker
+
+let dump ctx = 
+  let log rpc =
+    logf ctx `Info "%s" (Jsonrpc.to_string rpc)
+  in
+  WorkerPool.Dump.(make () |> rpc_of_t |> log);
+  Lib_worker.Redirector.Dump.(make () |> rpc_of_t |> log)
+
 let test_pool ~workers ~vms ~events ?(errors=0) ctx =
-  let open Lib_worker in
   logf ctx `Info "Setting worker pool size to %d" workers;
-  WorkerPool.set_size 0;
   WorkerPool.set_size workers;
   let open Item in
 
@@ -64,9 +71,9 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
 
   let mutexes = Array.init 2 (fun _ -> Mutex.create ()) in
 
-  let create_handle i =
+  let create_handle prefix i =
     let id =  "handle#" ^ (string_of_int i) in
-    let tag = "vm#" ^ (string_of_int (i mod vms)) in
+    let tag = prefix ^ "#" ^ (string_of_int (i mod vms)) in
     let job = {
       id; called = false; finalized = false;
     } in
@@ -74,19 +81,62 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
       job.called <- true;
       Mutex.execute mutexes.(i mod 2) (fun () ->
           if (i < errors) then
-            failwith "Testing failures"
+            failwith "testing failures"
         )
     in
     let finally () =
+      job.finalized <- true;
       Mutex.execute running.m (fun () ->
           decr running.count;
-          Condition.signal running.cond);
-      job.finalized <- true in
+          Condition.signal running.cond;
+          if (i < errors) then
+            failwith "testing failures"
+        )
+    in
     job, { id; tag; f; finally }
   in
 
+  let wait_for_jobs () =
+    dump ctx;
+    logf ctx `Info "Waiting for all jobs to be processed";
+    Mutex.execute running.m (fun () ->
+        while !(running.count) > 0 do
+          Condition.wait running.cond running.m
+        done
+      );
+    dump ctx
+  in
 
-  let jobs_and_handles = Array.init events create_handle in
+  let shutdown_workers () =
+    (* queue shutdowns *)
+    WorkerPool.set_size 0;
+
+    dump ctx;
+
+    (* workers need one last job to shut down *)
+    if workers == 1 then begin
+      let i = 0 in
+      let handle = {
+        id = "shutdown#" ^ (string_of_int i);
+        tag = "";
+        f = (fun () -> ());
+        finally = (fun () ->
+            Mutex.execute running.m (fun () ->
+                decr running.count;
+                Condition.signal running.cond);
+            ());
+      } in
+      Mutex.execute running.m (fun () -> incr running.count);
+      Redirector.push Redirector.default "shutdown" (handle.id, handle);
+      Redirector.push Redirector.parallel_queues "shutdown" (handle.id, handle)
+    end;
+    wait_for_jobs ();
+
+    WorkerPool.set_size (-1);
+    dump ctx
+  in
+
+  let jobs_and_handles = Array.init events (create_handle "vm") in
   let handles = Array.map snd jobs_and_handles in
 
   logf ctx `Info "Pushing items onto work queue";
@@ -97,52 +147,12 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
               Mutex.execute running.m (fun () -> incr running.count);
               Redirector.push Redirector.default h.tag (h.id, h)) handles
         );
-      WorkerPool.set_size 1;
       WorkerPool.set_size workers;
     );
-  WorkerPool.Dump.(make () |> rpc_of_t |> Jsonrpc.to_string |> print_endline);
-  Lib_worker.Redirector.Dump.(make () |> rpc_of_t |> Jsonrpc.to_string |> print_endline);
 
-  logf ctx `Info "Waiting for all jobs to be processed";
-  Mutex.execute running.m (fun () ->
-      while !(running.count) > 0 do
-        Condition.wait running.cond running.m
-      done
-    );
+  wait_for_jobs ();
 
-  WorkerPool.Dump.(make () |> rpc_of_t |> Jsonrpc.to_string |> print_endline);
-  Lib_worker.Redirector.Dump.(make () |> rpc_of_t |> Jsonrpc.to_string |> print_endline);
-
-  (* queue shutdowns *)
-  WorkerPool.set_size 0;
-  WorkerPool.Dump.(make () |> rpc_of_t |> Jsonrpc.to_string |> print_endline);
-
-  (* workers need one last job to shut down *)
-  for i = 1 to workers do
-    let handle = {
-      id = "shutdown#" ^ (string_of_int i);
-      tag = "";
-      f = (fun () -> ());
-      finally = (fun () ->
-          Mutex.execute running.m (fun () ->
-              decr running.count;
-              Condition.signal running.cond);
-          ());
-    } in
-    Mutex.execute running.m (fun () -> incr running.count);
-    Redirector.push Redirector.default "shutdown" (handle.id, handle);
-    Redirector.push Redirector.parallel_queues "shutdown" (handle.id, handle)
-  done;
-  logf ctx `Info "Waiting for all jobs to be processed";
-  Mutex.execute running.m (fun () ->
-      while !(running.count) > 0 do
-        Condition.wait running.cond running.m
-      done
-    );
-  WorkerPool.Dump.(make () |> rpc_of_t |> Jsonrpc.to_string |> print_endline);
-  WorkerPool.set_size 1;
-  WorkerPool.set_size (-1);
-  WorkerPool.Dump.(make () |> rpc_of_t |> Jsonrpc.to_string |> print_endline);
+  shutdown_workers ();
   logf ctx `Info "Checking handles";
 
   let count_expect msg p =
