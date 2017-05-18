@@ -390,3 +390,175 @@ module Make(I:Item) = struct
       inner Redirector.parallel_queues
   end
 end
+
+module Test = struct
+  open OUnit2
+  let assert_tags ~expected actual =
+    assert_equal ~printer:(String.concat ",") expected actual
+
+  let assert_string ~expected actual =
+    assert_equal ~printer:(fun x -> x) expected actual
+
+  let queues _ = Queues.create ()
+
+  let test_empty_queues _ =
+    let qs = Queues.create () in
+    let dst = Queues.create () in
+    assert_tags ~expected:[] (Queues.tags qs);
+    Queues.transfer_tag "foo" qs dst;
+    assert_tags ~expected:[] (Queues.tags qs);
+    assert_tags ~expected:[] (Queues.tags dst);
+    assert_bool "queue is empty" (Queues.get "foo" qs |> Queue.is_empty)
+
+  let always _ _ = true
+
+  let make_thread f =
+    let created = ref false in
+    let m = Mutex.create () in
+    let c = Condition.create () in
+    let thr = Thread.create (fun () ->
+        Mutex.execute m (fun () ->
+            created := true;
+            Condition.signal c
+          );
+        f ()
+      ) () in
+    Mutex.execute m (fun () ->
+        while not !created do
+          Condition.wait c m
+        done);
+    thr
+
+  (* pops [n] items in a separate thread from [qs].
+     and returns the items in the order they were popped.
+     [f] is executed in parallel with the popping thread.
+  *)
+  let with_pop_thread n qs f =
+    let finished = ref false in
+    let popped = ref [] in
+    let thr = make_thread (fun () ->
+        for i = 1 to n do
+          let tag, item = Queues.pop qs in
+          popped := (tag, item) :: !popped
+        done;
+        finished := true;
+      ) in
+    f ();
+    Thread.join thr;
+    assert_bool "pop test finished" !finished;
+    assert_tags ~expected:[] (Queues.tags qs);
+    List.rev !popped
+
+  let items_printer lst =
+    List.map (fun (t,i) -> Printf.sprintf "%s,%d" t i) lst |>
+    String.concat "; "
+
+  (* expects only item, pops it and checks it *)
+  let with_one_pop_thread (mytag, myitem) qs f =
+    let popped = with_pop_thread 1 qs f in
+    assert_bool "queue is empty after pop" (Queues.get mytag qs |> Queue.is_empty);
+    assert_equal ~printer:items_printer [(mytag, myitem)] popped
+
+  (* checks that the pop schedule is round-robin.
+     we don't do an exact comparison because even if the point where the RR schedule
+     starts is different, or if the tags get picked in a different order it can still
+     be a valid schedule if we always pick the oldest queued item from each tag in turn.
+  *)
+  let check_schedule input schedule =
+    assert_equal ~msg:"all elements got scheduled"
+      ~printer:items_printer
+      (List.fast_sort compare input)
+      (List.fast_sort compare schedule);
+
+    let schedule_str = items_printer schedule in
+    let schedule_err = "schedule is not RR: " ^ schedule_str in
+    List.fold_left (fun (last_i) (t, i) ->
+        (* we pick the 1st item from all tags,
+           then the 2nd item from all tags, and so on.
+           So once we started picking the 3rd item we must not see the
+           1st or 2nd items get scheduled.
+        *)
+        assert_bool schedule_err (i >= last_i);
+        i
+      ) (-1) schedule |> ignore
+
+  let test_one =
+    let mytag = "mytag" in
+    let myitem = 42 in
+    let with_thread f _ =
+      let qs = Queues.create () in
+      with_one_pop_thread (mytag, myitem) qs (f qs) in
+
+    let test_rr n _ =
+      let qs =  Queues.create () in
+      let tag_of i = "vm" ^ (string_of_int (i+1)) in
+      let input =
+        Array.init n (fun m ->
+            Array.init (n-m) (fun i ->
+                tag_of m, (i+1)
+              ) |> Array.to_list
+          ) |> Array.to_list |> List.flatten in
+      if n == 3 then
+        let vm1 = "vm1" and vm2 = "vm2" and vm3 = "vm3" in
+        assert_equal ~printer:items_printer
+          [vm1, 1; vm1, 2; vm1, 3; vm2, 1; vm2, 2; vm3, 1]
+          input;
+        List.iter (fun (t,i) ->
+            Queues.push_with_coalesce always t i qs
+          ) input;
+
+        let actual_tags = Queues.tags qs |> List.fast_sort compare in
+        let expected_tags = Array.init n tag_of
+                            |> Array.to_list |> List.fast_sort compare in
+        assert_equal ~printer:(String.concat ",")
+          ~msg:"tags"
+          expected_tags
+          actual_tags;
+
+        for i = 0 to n-1 do
+          let tag = tag_of i in
+          let q = Queues.get tag qs in
+          assert_equal
+            ~msg:"per-tag queue"
+            ~printer:(fun lst ->
+                List.map string_of_int lst |> String.concat ",")
+            (Array.init (n-i) (fun x -> x+1) |> Array.to_list)
+            (Queue.fold (fun acc e -> e :: acc) [] q |> List.rev)
+        done;
+
+        let popped = with_pop_thread (List.length input) qs ignore in
+        if n == 3 then
+          let expected = [vm1, 1; vm2, 1; vm3, 1; vm1, 2; vm2, 2; vm1, 3] in
+          assert_equal ~printer:items_printer expected popped;
+          check_schedule input popped
+    in
+
+    [
+      "pop, push" >:: with_thread (fun qs () ->
+          Queues.push_with_coalesce always mytag myitem qs;
+        );
+      "push, pop" >:: (fun _ ->
+          let qs = Queues.create () in
+          Queues.push_with_coalesce always mytag myitem qs;
+          assert_tags ~expected:[mytag] (Queues.tags qs);
+          with_one_pop_thread (mytag, myitem) qs ignore);
+      "push, transfer, pop" >:: (fun _ ->
+          let qs' = Queues.create () in
+          with_thread (fun qs () ->
+              Queues.push_with_coalesce always mytag myitem qs';
+              assert_tags ~expected:[mytag] (Queues.tags qs');
+
+              Queues.transfer_tag mytag qs' qs;
+              assert_tags ~expected:[] (Queues.tags qs');
+            ) ()
+        );
+      "RR 3" >:: test_rr 3;
+      "RR 100" >:: test_rr 100
+    ]
+
+  let tests = [
+    "empty queues" >:: test_empty_queues;
+    "queue items" >::: test_one
+  ]
+end
+let tests = Test.tests

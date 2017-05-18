@@ -85,3 +85,5 @@ module type S = sig
 end
 
 module Make : functor (I : Item) -> S with type item = I.t
+
+val tests :  OUnit2.test list

@@ -166,6 +166,7 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
 
 let suite =
   "xapi-work-queues" >::: [
+    "internal" >::: Xapi_work_queues.tests;
     "simple 1" >:: test_pool ~workers:2 ~events:10 ~vms:1;
     "simple 2" >:: test_pool ~workers:2 ~events:10 ~vms:2;
     "basic 1 thread" >:: test_pool ~workers:1 ~events:100 ~vms:100;
