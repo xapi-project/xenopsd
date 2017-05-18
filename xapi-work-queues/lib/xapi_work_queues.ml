@@ -393,8 +393,8 @@ end
 
 module Test = struct
   open OUnit2
-  let assert_tags ~expected actual =
-    assert_equal ~printer:(String.concat ",") expected actual
+  let assert_tags ~msg ~expected actual =
+    assert_equal ~msg ~printer:(String.concat ",") expected actual
 
   let assert_string ~expected actual =
     assert_equal ~printer:(fun x -> x) expected actual
@@ -404,11 +404,11 @@ module Test = struct
   let test_empty_queues _ =
     let qs = Queues.create () in
     let dst = Queues.create () in
-    assert_tags ~expected:[] (Queues.tags qs);
+    assert_tags ~msg:"Newly created queue is empty" ~expected:[] (Queues.tags qs);
     Queues.transfer_tag "foo" qs dst;
-    assert_tags ~expected:[] (Queues.tags qs);
-    assert_tags ~expected:[] (Queues.tags dst);
-    assert_bool "queue is empty" (Queues.get "foo" qs |> Queue.is_empty)
+    assert_tags ~msg:"Queue still empty after noop transfer" ~expected:[] (Queues.tags qs);
+    assert_tags ~msg:"Destination is empty after noop transfer" ~expected:[] (Queues.tags dst);
+    assert_bool "Queue for non-existent tag is empty" (Queues.get "foo" qs |> Queue.is_empty)
 
   let always _ _ = true
 
@@ -446,7 +446,8 @@ module Test = struct
     f ();
     Thread.join thr;
     assert_bool "pop test finished" !finished;
-    assert_tags ~expected:[] (Queues.tags qs);
+    (* When a per-tag queue becomes empty it must not show up anymore *)
+    assert_tags ~msg:"Per-tag queues are cleaned up" ~expected:[] (Queues.tags qs);
     List.rev !popped
 
   let items_printer lst =
@@ -482,13 +483,15 @@ module Test = struct
         i
       ) (-1) schedule |> ignore
 
-  let test_one =
+  let test_ops =
     let mytag = "mytag" in
     let myitem = 42 in
     let with_thread f _ =
       let qs = Queues.create () in
       with_one_pop_thread (mytag, myitem) qs (f qs) in
 
+    (* Test that [n] tags, each with at most [n] items
+       get popped in a round-robin fashion *)
     let test_rr n _ =
       let qs =  Queues.create () in
       let tag_of i = "vm" ^ (string_of_int (i+1)) in
@@ -528,6 +531,7 @@ module Test = struct
 
         let popped = with_pop_thread (List.length input) qs ignore in
         if n == 3 then
+          (* pick 1st item from each VM, then pick 2nd item from each, then 3rd *)
           let expected = [vm1, 1; vm2, 1; vm3, 1; vm1, 2; vm2, 2; vm1, 3] in
           assert_equal ~printer:items_printer expected popped;
           check_schedule input popped
@@ -537,28 +541,34 @@ module Test = struct
       "pop, push" >:: with_thread (fun qs () ->
           Queues.push_with_coalesce always mytag myitem qs;
         );
+
       "push, pop" >:: (fun _ ->
           let qs = Queues.create () in
           Queues.push_with_coalesce always mytag myitem qs;
-          assert_tags ~expected:[mytag] (Queues.tags qs);
+          assert_tags ~msg:"exactly 1 tag after push" ~expected:[mytag] (Queues.tags qs);
           with_one_pop_thread (mytag, myitem) qs ignore);
+
       "push, transfer, pop" >:: (fun _ ->
           let qs' = Queues.create () in
           with_thread (fun qs () ->
               Queues.push_with_coalesce always mytag myitem qs';
-              assert_tags ~expected:[mytag] (Queues.tags qs');
+              assert_tags ~msg:"Exactly 1 tag present" ~expected:[mytag] (Queues.tags qs');
 
               Queues.transfer_tag mytag qs' qs;
-              assert_tags ~expected:[] (Queues.tags qs');
+              assert_tags ~msg:"Tag removed after transfer" ~expected:[] (Queues.tags qs');
+              (* Do not check destination here because we have an active pop thread:
+                 the test wouldn't be deterministic *)
             ) ()
         );
+
       "RR 3" >:: test_rr 3;
+
       "RR 100" >:: test_rr 100
     ]
 
   let tests = [
     "empty queues" >:: test_empty_queues;
-    "queue items" >::: test_one
+    "queue" >::: test_ops
   ]
 end
 let tests = Test.tests

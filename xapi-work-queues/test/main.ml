@@ -164,6 +164,113 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
   count_expect "should be called" (fun (job, _) -> job.called);
   count_expect "should be finalized" (fun (job, _) -> job.finalized)
 
+let items_printer lst =
+  List.map (fun (t,i) -> Printf.sprintf "%d,%d" t i) lst |>
+  String.concat "; "
+
+let check_schedule ctx schedule n ~workers =
+  assert_equal ~printer:string_of_int ~msg:"all events scheduled" n (List.length schedule);
+  if workers = 1 then
+    (* can only check the exact schedule for 1 worker for now,
+       with multiple workers jobs get serialized per-tag, and are not expected to be
+       fully RR (they are delayed if another worker is already processing a job for that tag).
+       Also they can legitimately get skipped in a RR iteration completely if they just got added back.
+    *)
+    let schedule_str = items_printer schedule in
+    let schedule_err = "schedule is not RR: " ^ schedule_str in
+    List.fold_left (fun last_op (vm, op) ->
+        if op < last_op then
+          assert_failure (Printf.sprintf "%s -- [%d] @(%d, %d) scheduled too late, operation %d was already processed for other tags"
+                            schedule_err (last_op - op) vm op last_op);
+        op) (-1) schedule |> ignore
+
+let test_rr ~workers ~events ~vms ctx =
+  let module Item = struct
+    type t = string * (unit -> unit)
+    let dump_item (op, _) = Rpc.rpc_of_string op
+    let dump_task _ = Rpc.rpc_of_unit ()
+
+    let execute (_, f) = f ()
+    let finally _ = ()
+    let should_keep _ _ = true
+  end in
+  let module XWQ = Xapi_work_queues.Make(Item) in
+  let open XWQ in
+  logf ctx `Info "Setting worker pool size to %d" workers;
+
+  Random.init 0x3eed; (* deterministic *)
+  let m = Mutex.create () in
+  let c = Condition.create () in
+  let schedule = ref [] in
+
+  let available_events = ref events in
+  let limit = 10 in
+
+  let pending = ref events in
+
+  let vm_active = Array.make events None in
+
+  let execute vm op () =
+    Mutex.execute m (fun () ->
+        schedule := (vm, op) :: !schedule;
+        decr pending;
+        Condition.signal c;
+        match vm_active.(vm) with
+        | Some other_op ->
+          assert_failure
+            (Printf.sprintf "Events for same tag must be serialized, but got conflict on (%d, %d) and (%d, %d)"
+               vm op vm other_op)
+        | None ->
+          vm_active.(vm) <- Some op
+      );
+    Thread.yield ();
+    Thread.yield ();
+    Mutex.execute m (fun () ->
+        vm_active.(vm) <- None
+      )
+
+  in
+
+  let generate_operations vm =
+    let n =
+      if vm = vms-1 then !available_events
+      else let lim = min !available_events limit in
+        if lim > 0 then Random.int lim else 0
+    in
+    available_events := !available_events - n;
+    Array.init n (fun op ->
+        (Printf.sprintf "vm%d-op%d" vm op), execute vm op)|>
+    Array.to_list
+  in
+
+  let push_items (tag, lst) =
+    List.iter (Redirector.push Redirector.default tag) lst
+  in
+
+  let vm_tags = Array.init vms (fun vm -> "vm" ^ string_of_int vm) in
+
+  (* we could set the workers here: to execute while pushing,
+     although in that case checking the RR property is harder:
+     operation numbers will become lower
+  *)
+
+  vm_tags |> Array.mapi (fun vm tag -> tag, generate_operations vm) |>
+  Array.map (Thread.create push_items) |>
+  Array.iter Thread.join;
+  WorkerPool.set_size workers;
+
+  Mutex.execute m (fun () ->
+      logf ctx `Info "Waiting for %d events to be processed" !pending;
+      while !pending > 0 do
+        Condition.wait c m
+      done
+    );
+  WorkerPool.set_size 0;
+  logf ctx `Info "Checking schedule for %d" events;
+
+  check_schedule ctx (List.rev !schedule) events ~workers
+
+
 let suite =
   "xapi-work-queues" >::: [
     "internal" >::: Xapi_work_queues.tests;
@@ -174,6 +281,16 @@ let suite =
     "test per tag queueing" >:: test_pool ~workers:1 ~vms:4 ~events:1000;
     "test per tag queueing" >:: test_pool ~workers:25 ~vms:4 ~events:1000;
     "test per tag queueing with errors" >:: test_pool ~workers:25 ~vms:4 ~events:1000 ~errors:14;
+    "test item scheduling is RR" >:::
+    List.rev_map (fun workers ->
+        string_of_int workers >:::
+        List.rev_map (fun vms ->
+            string_of_int vms >:::
+            List.rev_map (fun events ->
+                string_of_int events >:: test_rr ~workers ~events ~vms
+              ) [0; 1; 3; 100; 1000 (*; 10000*)]
+          ) [1; 10; 100; 500]
+      ) [1; 3; 25]
   ]
 
 let () =
