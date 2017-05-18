@@ -38,50 +38,28 @@ sig
   val should_keep : t -> t list -> bool
 end
 
-module type Dump =
-sig
-  type t
-  val t_of_rpc : Rpc.t -> t
-  val rpc_of_t : t -> Rpc.t
-
-  (** Dump the global state of this module *)
-  val make : unit -> t
-end
-
 module type S = sig
+  type t (** type of worker pools *)
+
   type item (** work item *)
-  module Redirector :
-  sig
-    (** A redirector queues items, and redirects their execution to a thread
-        from the worker pool *)
-    type t
-    module Dump : Dump
 
-    (** The default queue should be used for all items, except see below *)
-    val default : t
+  (** [create n] Create a worker pool with [n] initial workers. *)
+  val create : int -> t
 
-    (** We create another queue only for Parallel atoms so as to avoid a situation where
-        Parallel atoms can not progress because all the workers available for the
-        default queue are used up by other operations depending on further Parallel
-        atoms, creating a deadlock.
-    *)
-    val parallel_queues : t
+  (** [set_size pool n] sets the worker [pool] size to [n]. *)
+  val set_size : t -> int -> unit
 
-    (** [push queue tag item] Pushes [item] at the end of [queue].
-        Items with the same [tag] are serialised, but items with different tags
-        can be executed in parallel if enough workers are available.
-        [tag]s get scheduled in a round-robin fashion.
+  (** [push pool tag item] Pushes [item] at the end of queue for [pool].
+      Items with the same [tag] are serialised, but items with different tags
+      can be executed in parallel if enough workers are available.
+      [tag]s get scheduled in a round-robin fashion.
 
-        You need to start some workers, otherwise none of the items get executed.
-    *)
-    val push : t -> string -> item -> unit
-  end
-  module WorkerPool :
-  sig
-    module Dump : Dump
-    (** [set_size n] sets the worker pool size to [n]. *)
-    val set_size : int -> unit
-  end
+      You need to start some workers, otherwise none of the items get executed.
+  *)
+  val push : t -> string -> item -> unit
+
+  (** [dump pool] Dumps diagnostic information about the pool *)
+  val dump : t list -> Rpc.t * Rpc.t
 end
 
 module Make : functor (I : Item) -> S with type item = I.t

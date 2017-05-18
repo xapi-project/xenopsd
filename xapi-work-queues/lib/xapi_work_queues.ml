@@ -116,20 +116,12 @@ module type Dump = sig
 end
 
 module type S = sig
+  type t
   type item
-  module Redirector :
-  sig
-    type t
-    module Dump : Dump
-    val default : t
-    val parallel_queues : t
-    val push : t -> string -> item -> unit
-  end
-  module WorkerPool :
-  sig
-    module Dump : Dump
-    val set_size : int -> unit
-  end
+  val create : int -> t
+  val set_size : t -> int -> unit
+  val push : t -> string -> item -> unit
+  val dump : t list -> Rpc.t * Rpc.t
 end
 
 module Make(I:Item) = struct
@@ -138,15 +130,7 @@ module Make(I:Item) = struct
   let describe_item x = x |> I.dump_item |> Jsonrpc.to_string
   module Redirector = struct
     type t = { queues: item Queues.t; mutex: Mutex.t }
-
-    (* When a thread is not actively processing a queue, items are placed here: *)
-    let default = { queues = Queues.create (); mutex = Mutex.create () }
-    (* We create another queue only for Parallel atoms so as to avoid a situation where
-       Parallel atoms can not progress because all the workers available for the
-       default queue are used up by other operations depending on further Parallel
-       atoms, creating a deadlock.
-    *)
-    let parallel_queues = { queues = Queues.create (); mutex = Mutex.create () }
+    let create () = { queues = Queues.create (); mutex = Mutex.create () }
 
     (* When a thread is actively processing a queue, items are redirected to a thread-private queue *)
     let overrides = ref StringMap.empty
@@ -196,17 +180,17 @@ module Make(I:Item) = struct
       } [@@deriving rpc]
       type t = q list [@@deriving rpc]
 
-      let make () =
+      let make redirectors =
         Mutex.execute m
           (fun () ->
+             let queues = List.rev_map (fun t -> t.queues) redirectors in
              let one queue =
                List.map
                  (fun t ->
                     { tag = t; items = List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get t queue)) }
                  ) (Queues.tags queue) in
-             List.concat (List.map one (default.queues :: parallel_queues.queues :: (List.map snd (StringMap.bindings !overrides))))
+             List.concat (List.map one (List.rev_append queues (List.map snd (StringMap.bindings !overrides))))
           )
-
     end
   end
 
@@ -306,89 +290,94 @@ module Make(I:Item) = struct
       t
   end
 
-  module WorkerPool = struct
+  type t = Redirector.t
 
-    (* Store references to Worker.ts here *)
-    let pool = ref []
-    let m = Mutex.create ()
+  (* Store references to Worker.ts here *)
+  let pool = ref []
+  let m = Mutex.create ()
 
-
-    module Dump = struct
-      type w = {
-        state: string;
-        task: Rpc.t option;
-      } [@@deriving rpc]
-      type t = w list [@@deriving rpc]
-      let make () =
-        Mutex.execute m
-          (fun () ->
-             List.map
-               (fun t ->
-                  match Worker.get_state t with
-                  | Worker.Idle -> { state = "Idle"; task = None }
-                  | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (dump_task item) }
-                  | Worker.Shutdown_requested -> { state = "Shutdown_requested"; task = None }
-                  | Worker.Shutdown -> { state = "Shutdown"; task = None }
-               ) !pool
-          )
-    end
-
-    (* Compute the number of active threads ie those which will continue to operate *)
-    let count_active queues =
+  module Dump = struct
+    type w = {
+      state: string;
+      task: Rpc.t option;
+    } [@@deriving rpc]
+    type t = w list [@@deriving rpc]
+    let make () =
       Mutex.execute m
         (fun () ->
-           (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
-              are only interested in comparing the equality of their static references
-           *)
-           List.map (fun w -> w.Worker.redirector == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
+           List.map
+             (fun t ->
+                match Worker.get_state t with
+                | Worker.Idle -> { state = "Idle"; task = None }
+                | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (dump_task item) }
+                | Worker.Shutdown_requested -> { state = "Shutdown_requested"; task = None }
+                | Worker.Shutdown -> { state = "Shutdown"; task = None }
+             ) !pool
         )
-
-    let find_one queues f = List.fold_left (fun acc x -> acc || (x.Worker.redirector == queues && (f x))) false
-
-    (* Clean up any shutdown threads and remove them from the master list *)
-    let gc queues pool =
-      List.fold_left
-        (fun acc w ->
-           (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
-              are only interested in comparing the equality of their static references
-           *)
-           if w.Worker.redirector == queues && Worker.get_state w = Worker.Shutdown then begin
-             Worker.join w;
-             acc
-           end else w :: acc) [] pool
-
-    let incr queues =
-      debug "Adding a new worker to the thread pool";
-      Mutex.execute m
-        (fun () ->
-           pool := gc queues !pool;
-           if not(find_one queues Worker.restart !pool)
-           then pool := (Worker.create queues) :: !pool
-        )
-
-    let decr queues =
-      debug "Removing a worker from the thread pool";
-      Mutex.execute m
-        (fun () ->
-           pool := gc queues !pool;
-           if not(find_one queues Worker.shutdown !pool)
-           then debug "There are no worker threads left to shutdown."
-        )
-
-    let set_size size =
-      let inner queues =
-        let active = count_active queues in
-        debug "XXX active = %d" active;
-        for i = 1 to max 0 (size - active) do
-          incr queues
-        done;
-        for i = 1 to max 0 (active - size) do
-          decr queues
-        done
-      in
-      inner Redirector.default;
-      inner Redirector.parallel_queues
   end
+  let dump redirectors =
+    Redirector.Dump.(make redirectors |> rpc_of_t),
+    Dump.(make () |> rpc_of_t)
+
+  (* Compute the number of active threads ie those which will continue to operate *)
+  let count_active queues =
+    Mutex.execute m
+      (fun () ->
+         (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
+            are only interested in comparing the equality of their static references
+         *)
+         List.map (fun w -> w.Worker.redirector == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
+      )
+
+  let find_one queues f = List.fold_left (fun acc x -> acc || (x.Worker.redirector == queues && (f x))) false
+
+  (* Clean up any shutdown threads and remove them from the master list *)
+  let gc queues pool =
+    List.fold_left
+      (fun acc w ->
+         (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
+            are only interested in comparing the equality of their static references
+         *)
+         if w.Worker.redirector == queues && Worker.get_state w = Worker.Shutdown then begin
+           Worker.join w;
+           acc
+         end else w :: acc) [] pool
+
+  let incr queues =
+    debug "Adding a new worker to the thread pool";
+    Mutex.execute m
+      (fun () ->
+         pool := gc queues !pool;
+         if not(find_one queues Worker.restart !pool)
+         then pool := (Worker.create queues) :: !pool
+      )
+
+  let decr queues =
+    debug "Removing a worker from the thread pool";
+    Mutex.execute m
+      (fun () ->
+         pool := gc queues !pool;
+         if not(find_one queues Worker.shutdown !pool)
+         then debug "There are no worker threads left to shutdown."
+      )
+
+  let set_size queues size =
+    let active = count_active queues in
+    debug "XXX active = %d" active;
+    for i = 1 to max 0 (size - active) do
+      incr queues
+    done;
+    for i = 1 to max 0 (active - size) do
+      decr queues
+    done
+
+  let create n =
+    let t = Redirector.create () in
+    if n > 0 then
+      set_size t n;
+    t
+
+  let push = Redirector.push
 end
 
 module Test = struct

@@ -423,7 +423,26 @@ module Item = struct
     | _ -> true
 end
 
-include Xapi_work_queues.Make(Item)
+module WorkerQueues = Xapi_work_queues.Make(Item)
+module Redirector = struct
+  type t = WorkerQueues.t
+  (** The default queue should be used for all items, except see below *)
+  let default = WorkerQueues.create 0
+
+  (** We create another queue only for Parallel atoms so as to avoid a situation where
+      Parallel atoms can not progress because all the workers available for the
+      default queue are used up by other operations depending on further Parallel
+      atoms, creating a deadlock.
+  *)
+  let parallel_queues = WorkerQueues.create 0
+
+  let push = WorkerQueues.push
+end
+module WorkerPool = struct
+  let set_size size =
+    WorkerQueues.set_size Redirector.default size;
+    WorkerQueues.set_size Redirector.parallel_queues size
+end
 
 (* Keep track of which VMs we're rebooting so we avoid transient glitches
    where the power_state becomes Halted *)
@@ -2287,8 +2306,8 @@ let register_objects () =
 
 module Diagnostics = struct
   type t = {
-    queues: Redirector.Dump.t;
-    workers: WorkerPool.Dump.t;
+    queues: Rpc.t;
+    workers: Rpc.t;
     scheduler: Scheduler.Dump.dump;
     updates: Updates.Dump.dump;
     tasks: TaskDump.t list;
@@ -2296,9 +2315,9 @@ module Diagnostics = struct
   } [@@deriving rpc]
 
   let make () =
+    let queues, workers = WorkerQueues.dump [Redirector.default; Redirector.parallel_queues] in
     let module B = (val get_backend (): S) in {
-      queues = Redirector.Dump.make ();
-      workers = WorkerPool.Dump.make ();
+      queues; workers;
       scheduler = Scheduler.Dump.make scheduler;
       updates = Updates.Dump.make updates;
       tasks = List.map TaskDump.of_task (Xenops_task.list tasks);

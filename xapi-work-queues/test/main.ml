@@ -51,16 +51,18 @@ type running = {
 
 open Lib_worker
 
-let dump ctx = 
+let dump ctx t = 
   let log rpc =
     logf ctx `Info "%s" (Jsonrpc.to_string rpc)
   in
-  WorkerPool.Dump.(make () |> rpc_of_t |> log);
-  Lib_worker.Redirector.Dump.(make () |> rpc_of_t |> log)
+  let r1, r2 = Lib_worker.dump [t] in
+  log r1;
+  log r2
 
 let test_pool ~workers ~vms ~events ?(errors=0) ctx =
+  let default = create 0 in
   logf ctx `Info "Setting worker pool size to %d" workers;
-  WorkerPool.set_size workers;
+  set_size default workers;
   let open Item in
 
   let running = {
@@ -97,21 +99,20 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
   in
 
   let wait_for_jobs () =
-    dump ctx;
+    dump ctx default;
     logf ctx `Info "Waiting for all jobs to be processed";
     Mutex.execute running.m (fun () ->
         while !(running.count) > 0 do
           Condition.wait running.cond running.m
         done
       );
-    dump ctx
+    dump ctx default
   in
 
   let shutdown_workers () =
     (* queue shutdowns *)
-    WorkerPool.set_size 0;
-
-    dump ctx;
+    set_size default 0;
+    dump ctx default;
 
     (* workers need one last job to shut down *)
     if workers == 1 then begin
@@ -127,13 +128,12 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
             ());
       } in
       Mutex.execute running.m (fun () -> incr running.count);
-      Redirector.push Redirector.default "shutdown" (handle.id, handle);
-      Redirector.push Redirector.parallel_queues "shutdown" (handle.id, handle)
+      push default "shutdown" (handle.id, handle);
     end;
     wait_for_jobs ();
 
-    WorkerPool.set_size (-1);
-    dump ctx
+    set_size default (-1);
+    dump ctx default
   in
 
   let jobs_and_handles = Array.init events (create_handle "vm") in
@@ -145,9 +145,9 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
       Mutex.execute mutexes.(1) (fun () ->
           Array.iteri (fun i h ->
               Mutex.execute running.m (fun () -> incr running.count);
-              Redirector.push Redirector.default h.tag (h.id, h)) handles
+              push default h.tag (h.id, h)) handles
         );
-      WorkerPool.set_size workers;
+      set_size default workers;
     );
 
   wait_for_jobs ();
@@ -198,6 +198,7 @@ let test_rr ~workers ~events ~vms ctx =
   let open XWQ in
   logf ctx `Info "Setting worker pool size to %d" workers;
 
+  let default = create 0 in
   Random.init 0x3eed; (* deterministic *)
   let m = Mutex.create () in
   let c = Condition.create () in
@@ -244,7 +245,7 @@ let test_rr ~workers ~events ~vms ctx =
   in
 
   let push_items (tag, lst) =
-    List.iter (Redirector.push Redirector.default tag) lst
+    List.iter (push default tag) lst
   in
 
   let vm_tags = Array.init vms (fun vm -> "vm" ^ string_of_int vm) in
@@ -257,7 +258,7 @@ let test_rr ~workers ~events ~vms ctx =
   vm_tags |> Array.mapi (fun vm tag -> tag, generate_operations vm) |>
   Array.map (Thread.create push_items) |>
   Array.iter Thread.join;
-  WorkerPool.set_size workers;
+  set_size default workers;
 
   Mutex.execute m (fun () ->
       logf ctx `Info "Waiting for %d events to be processed" !pending;
@@ -265,7 +266,7 @@ let test_rr ~workers ~events ~vms ctx =
         Condition.wait c m
       done
     );
-  WorkerPool.set_size 0;
+  set_size default 0;
   logf ctx `Info "Checking schedule for %d" events;
 
   check_schedule ctx (List.rev !schedule) events ~workers
