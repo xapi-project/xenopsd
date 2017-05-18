@@ -2,6 +2,15 @@
     {e 0.1.0 - {{:https://github.com/xapi-project/xapi-work-queues}homepage}} 
 
     Consult the {{!S}module documentation}.
+
+    A worker pool has a limited number of worker threads.
+    Each worker pops one tagged item from the queue in a round-robin fashion.
+    While the item is executed the tag temporarily doesn't participate in round-robin scheduling.
+    If during execution more items get queued with the same tag they get redirected to a private queue.
+    Once the item finishes execution the tag will participate in RR scheduling again.
+
+    This ensures that items with the same tag do not get executed in parallel,
+    and that a tag with a lot of items does not starve the execution of other tags.
 *)
 
 (** A work item submitted to a worker pool *)
