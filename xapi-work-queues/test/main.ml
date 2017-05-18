@@ -17,7 +17,7 @@ module Item = struct
     } [@@deriving rpc]
   end
 
-  let describe_item (op, _) = op
+  let dump_item (op, _) = Rpc.rpc_of_string op
 
   let dump_task (_, (task:handle)) =
     Dump.rpc_of_t {Dump.id = task.id; tag = task.tag}

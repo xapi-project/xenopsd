@@ -101,7 +101,7 @@ end
 
 module type Item = sig
   type t
-  val describe_item : t -> string
+  val dump_item : t -> Rpc.t
   val dump_task : t -> Rpc.t
   val execute : t -> unit
   val finally : t -> unit
@@ -135,6 +135,7 @@ end
 module Make(I:Item) = struct
   open I
   type item = I.t
+  let describe_item x = x |> I.dump_item |> Jsonrpc.to_string
   module Redirector = struct
     type t = { queues: item Queues.t; mutex: Mutex.t }
 
