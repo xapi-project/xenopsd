@@ -168,8 +168,11 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
   count_expect "should be finalized" (fun (job, _) -> job.finalized)
 
 let items_printer lst =
-  List.map (fun (t,i) -> Printf.sprintf "%d,%d" t i) lst |>
+  List.map (fun (t,i,_) -> Printf.sprintf "%d,%d" t i) lst |>
   String.concat "; "
+
+module IntMap = Map.Make(struct type t = int let compare = compare end)
+module IntSet = Set.Make(struct type t = int let compare = compare end)
 
 let check_schedule ctx schedule n ~workers =
   assert_equal ~printer:string_of_int ~msg:"all events scheduled" n (List.length schedule);
@@ -181,20 +184,43 @@ let check_schedule ctx schedule n ~workers =
     *)
     let schedule_str = items_printer schedule in
     let schedule_err = "schedule is not RR: " ^ schedule_str in
-    List.fold_left (fun last_op (vm, op) ->
+    List.fold_left (fun last_op (vm, op, _) ->
         if op < last_op then
           assert_failure (Printf.sprintf "%s -- [%d] @(%d, %d) scheduled too late, operation %d was already processed for other tags"
                             schedule_err (last_op - op) vm op last_op);
-        op) (-1) schedule |> ignore
+        op) (-1) schedule |> ignore;
+    (* check non-starvation properties when workers >= 1.
+       we must only schedule the same tag if there was no other schedulable tag at the time.
+       Operations on same tag must be executed in increasing order of operations.
+    *)
+    List.fold_left (fun (seen, tags_lastop) (tag, op, schedulable) ->
+        begin try
+            let lastop = IntMap.find tag tags_lastop in
+            if op <= lastop then
+              assert_failure (Printf.sprintf "%s -- @(%d, %d) scheduled out of order, last operation on tag %d was %d"
+                                schedule_err tag op tag lastop);
+          with Not_found -> ()
+        end;
+        (* tags that are schedulable but were not seen in this RR iteration *)
+        let unseen_schedulable = IntSet.diff schedulable seen in
+        if IntSet.mem tag seen && not (IntSet.is_empty unseen_schedulable) then
+          assert_failure (Printf.sprintf "%s -- @(%d, %d) tag scheduled again, but there were other schedulable tags: %s"
+                            schedule_err tag op (IntSet.elements unseen_schedulable |> List.rev_map string_of_int |> String.concat ","));
+        (* when we've seen all the schedulable tags then a new RR iteration starts *)
+        (if IntSet.is_empty unseen_schedulable then IntSet.empty else IntSet.add tag seen),
+        (IntMap.add tag op tags_lastop)
+      ) (IntSet.empty, IntMap.empty) schedule |> ignore
+
+
 
 let test_rr ~workers ~events ~vms ctx =
   let module Item = struct
-    type t = string * (unit -> unit)
-    let dump_item (op, _) = Rpc.rpc_of_string op
+    type t = string * (unit -> unit) * (unit -> unit)
+    let dump_item (op, _, _) = Rpc.rpc_of_string op
     let dump_task _ = Rpc.rpc_of_unit ()
 
-    let execute (_, f) = f ()
-    let finally _ = ()
+    let execute (_, f, _) = f ()
+    let finally (_, _, g) = g ()
     let should_keep _ _ = true
   end in
   let module XWQ = Xapi_work_queues.Make(Item) in
@@ -214,25 +240,41 @@ let test_rr ~workers ~events ~vms ctx =
 
   let vm_active = Array.make events None in
 
+  (* set of tags we know for sure are schedulable.
+     There might be more than this due to race condition between a tag being just finished,
+     and tracked in this set as schedulable
+  *)
+  let schedulable = ref IntSet.empty in
+  let vm_maxop = Array.make vms 0 in
+
   let execute vm op () =
     Mutex.execute m (fun () ->
-        schedule := (vm, op) :: !schedule;
+        schedulable := IntSet.remove vm !schedulable;
+        schedule := (vm, op, !schedulable) :: !schedule;
         decr pending;
         Condition.signal c;
-        match vm_active.(vm) with
-        | Some other_op ->
-          assert_failure
-            (Printf.sprintf "Events for same tag must be serialized, but got conflict on (%d, %d) and (%d, %d)"
-               vm op vm other_op)
-        | None ->
-          vm_active.(vm) <- Some op
+        begin match vm_active.(vm) with
+          | Some other_op ->
+            assert_failure
+              (Printf.sprintf "Events for same tag must be serialized, but got conflict on (%d, %d) and (%d, %d)"
+                 vm op vm other_op)
+          | None ->
+            vm_active.(vm) <- Some op;
+        end;
       );
     Thread.yield ();
     Thread.yield ();
     Mutex.execute m (fun () ->
-        vm_active.(vm) <- None
+        vm_active.(vm) <- None;
       )
 
+  in
+
+  let finally vm op () =
+    Mutex.execute m (fun () ->
+        if op < vm_maxop.(vm) then
+          schedulable := IntSet.add vm !schedulable;
+      )
   in
 
   let generate_operations vm =
@@ -242,8 +284,9 @@ let test_rr ~workers ~events ~vms ctx =
         if lim > 0 then Random.int lim else 0
     in
     available_events := !available_events - n;
+    vm_maxop.(vm) <- n-1;
     Array.init n (fun op ->
-        (Printf.sprintf "vm%d-op%d" vm op), execute vm op)|>
+        (Printf.sprintf "vm%d-op%d" vm op), execute vm op, finally vm op)|>
     Array.to_list
   in
 
