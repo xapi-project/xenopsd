@@ -46,7 +46,7 @@ type job = {
 type running = {
   m: Mutex.t;
   cond: Condition.t;
-  count: int ref;
+  mutable count: int;
 }
 
 open Lib_worker
@@ -68,7 +68,7 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
   let running = {
     m = Mutex.create ();
     cond = Condition.create ();
-    count = ref 0;
+    count = 0;
   } in
 
   let mutexes = Array.init 2 (fun _ -> Mutex.create ()) in
@@ -89,7 +89,7 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
     let finally () =
       job.finalized <- true;
       Mutex.execute running.m (fun () ->
-          decr running.count;
+          running.count <- running.count - 1;
           Condition.signal running.cond;
           if (i < errors) then
             failwith "testing failures"
@@ -102,10 +102,13 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
     dump ctx default;
     logf ctx `Info "Waiting for all jobs to be processed";
     Mutex.execute running.m (fun () ->
-        while !(running.count) > 0 do
+        while running.count > 0 do
+          logf ctx `Info "Waiting for %d jobs" running.count;
+          dump ctx default;
           Condition.wait running.cond running.m
         done
       );
+    logf ctx `Info "All jobs have finished";
     dump ctx default
   in
 
@@ -123,11 +126,11 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
         f = (fun () -> ());
         finally = (fun () ->
             Mutex.execute running.m (fun () ->
-                decr running.count;
+                running.count <- running.count - 1;
                 Condition.signal running.cond);
             ());
       } in
-      Mutex.execute running.m (fun () -> incr running.count);
+      Mutex.execute running.m (fun () -> running.count <- running.count + 1);
       push default "shutdown" (handle.id, handle);
     end;
     wait_for_jobs ();
@@ -144,7 +147,7 @@ let test_pool ~workers ~vms ~events ?(errors=0) ctx =
   Mutex.execute mutexes.(0) (fun () ->
       Mutex.execute mutexes.(1) (fun () ->
           Array.iteri (fun i h ->
-              Mutex.execute running.m (fun () -> incr running.count);
+              Mutex.execute running.m (fun () -> running.count <- running.count + 1);
               push default h.tag (h.id, h)) handles
         );
       set_size default workers;
