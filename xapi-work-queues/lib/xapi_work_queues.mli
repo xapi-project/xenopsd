@@ -3,6 +3,8 @@
 
     Consult the {{!S}module documentation}.
 
+    {1 Worker pool scheduling}
+
     A worker pool has a limited number of worker threads.
     Each worker pops one tagged item from the queue in a round-robin fashion.
     While the item is executed the tag temporarily doesn't participate in round-robin scheduling.
@@ -11,6 +13,38 @@
 
     This ensures that items with the same tag do not get executed in parallel,
     and that a tag with a lot of items does not starve the execution of other tags.
+
+    {1 Example usage}
+
+    {[
+      module Operation = struct
+        type t = string
+        let rpc_of_t = Rpc.rpc_of_string
+        let execute op = print_endline op
+      end
+
+      module WorkerPool = Xapi_work_queues.Make(struct
+          type task = Operation.t -> unit
+          type t = Operation.t * task
+
+          let dump_item (op, _) = Rpc.rpc_of_string op
+          let dump_task _ = Rpc.rpc_of_unit ()
+
+          let execute (op, f) = f op
+
+          let finally _ = ()
+          let should_keep _ _ = true
+        end)
+
+
+      let () =
+        let pool = WorkerPool.create 25 in
+        WorkerPool.push pool "tag1" (Start, Operation.execute);
+        WorkerPool.push pool "tag2" (Start, Operation.execute);
+        WorkerPool.push pool "tag2" (Stop, Operation.execute);
+        WorkerPool.push pool "tag1" (Stop, Operation.execute);
+        ...
+    ]}
 *)
 
 (** A work item submitted to a worker pool *)
@@ -52,13 +86,13 @@ module type S = sig
 
   type item (** work item *)
 
-  (** [create n] Create a worker pool with [n] initial workers. *)
+  (** [create n] create a worker pool with [n] initial workers. *)
   val create : int -> t
 
   (** [set_size pool n] sets the worker [pool] size to [n]. *)
   val set_size : t -> int -> unit
 
-  (** [push pool tag item] Pushes [item] at the end of queue for [pool].
+  (** [push pool tag item] pushes [item] at the end of queue for [pool].
       Items with the same [tag] are serialised, but items with different tags
       can be executed in parallel if enough workers are available.
       [tag]s get scheduled in a round-robin fashion.
@@ -67,7 +101,7 @@ module type S = sig
   *)
   val push : t -> string -> item -> unit
 
-  (** [dump pool] Dumps diagnostic information about the pool *)
+  (** [dump pool] dumps diagnostic information about the pool *)
   val dump : t list -> Rpc.t * Rpc.t
 end
 
