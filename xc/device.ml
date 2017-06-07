@@ -198,6 +198,7 @@ module Generic = struct
 
   let clean_shutdown_wait (task: Xenops_task.task_handle) ~xs ~ignore_transients (x: device) =
     debug "Device.Generic.clean_shutdown_wait %s" (string_of_device x);
+	xs.Xs.rm (Hotplug.path_written_by_hotplug_scripts x);
 
     let on_error () =
       let error_path = error_path_of_device ~xs x in
@@ -240,6 +241,7 @@ module Generic = struct
     safe_rm xs (frontend_ro_path_of_device ~xs x)
 
   let hard_shutdown_complete ~xs (x: device) =
+	xs.Xs.rm (Hotplug.path_written_by_hotplug_scripts x);
     if !Xenopsd.run_hotplug_scripts
     then backend_closed ~xs x
     else unplug_watch ~xs x
