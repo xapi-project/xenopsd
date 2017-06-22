@@ -36,6 +36,7 @@ let watch_queue_length = ref 1000
 
 let default_vbd_backend_kind = ref "vbd"
 let ca_140252_workaround = ref false
+let action_after_qemu_crash = ref None
 
 let options = [
     "queue", Arg.Set_string Xenops_interface.queue_name, (fun () -> !Xenops_interface.queue_name), "Listen on a specific queue";
@@ -52,6 +53,7 @@ let options = [
     "use-upstream-qemu", Arg.Bool (fun x -> use_upstream_qemu := x), (fun () -> string_of_bool !use_upstream_qemu), "True if we want to use upsteam QEMU";
     "default-vbd-backend-kind", Arg.Set_string default_vbd_backend_kind, (fun () -> !default_vbd_backend_kind), "Default backend for VBDs";
     "ca-140252-workaround", Arg.Bool (fun x -> ca_140252_workaround := x), (fun () -> string_of_bool !ca_140252_workaround), "Workaround for evtchn misalignment for legacy PV tools";
+    "action-after-qemu-crash", Arg.String (fun x -> action_after_qemu_crash := if x="" then None else Some x), (fun () -> match !action_after_qemu_crash with None->"" | Some x->x), "Action to take for VMs if QEMU crashes or dies unexpectedly: pause, poweroff. Otherwise, no action (default).";
 ]
 
 let path () = Filename.concat !sockets_path "xenopsd"
