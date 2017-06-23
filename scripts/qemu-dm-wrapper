@@ -21,6 +21,7 @@ path = "/sbin:/usr/sbin:/bin:/usr/bin"
 
 xenstore_write_cmd = "xenstore-write"
 xenstore_read_cmd = "xenstore-read"
+xenstore_exists_cmd = "xenstore-exists"
 
 # Set cgroup_slice to the name of the cgroup slice the qemu-dm process
 # should live in.
@@ -49,6 +50,10 @@ def xenstore_read(key):
     if rc != 0:
         raise RuntimeError(stderr.readlines())
     return stdout.readline().strip()
+
+def xenstore_exists(key):
+    (rc, stdout, stderr) = doexec([xenstore_exists_cmd, key])
+    return rc
 
 def enable_core_dumps():
     from resource import getrlimit, RLIMIT_CORE, setrlimit
@@ -104,10 +109,21 @@ def main(argv):
     if os.path.exists("/usr/share/qemu-linaro/qemu"):
         qemu_args = qemu_args + ["-L", "/usr/share/qemu-linaro/qemu"]
 
+    if xenstore_exists("/local/domain/%d/platform/nic_type" % domid):
+        print "No explicit NIC selected. Defaulting to rtl8139. "
+    else:
+        nic = xenstore_read("/local/domain/%d/platform/nic_type" % domid)
+        if nic != None:
+            print "qemu: nic_type %s" % nic
+            qemu_args = map(lambda x: x.replace("rtl8139", "%s" % nic), qemu_args)
+        else:
+            print "NIC type selected but value is NULL. Defaulting to rtl8139"
+
+
     print "qemu-dm-wrapper in python:"
     print "Using domid: %d" % domid
     print "Starting: %s" % qemu_dm
-    print "Arguments: %s" % " ".join(argv[1:])
+    print "Arguments: %s" % " ".join(qemu_args)
     print "everything else is from qemu-dm:"
 
     core_dump_limit = enable_core_dumps()
