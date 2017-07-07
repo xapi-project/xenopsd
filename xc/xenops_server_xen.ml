@@ -1351,8 +1351,24 @@ module VM = struct
 						Device.Vkbd.add ~xc ~xs di.Xenctrl.domid;
 						Device.Dm.start_vnconly task ~xs ~dmpath:qemu_dm info di.Xenctrl.domid
 			) (create_device_model_config vm vmextra vbds vifs vgpus);
+			let notify_unplug domid =
+				let write_control_feature x =
+					xs.Xs.write (Printf.sprintf "/local/domain/%d/control/feature-%s" domid x) "1"
+				in
+				List.iter (fun x -> write_control_feature x)
+					["suspend"; "shutdown"; "vcpu-hotplug"]
+			in
+			let is_HVM_Linux vm =
+				try
+					let x = List.assoc "linux_template" vm.Vm.templatedata in
+					x = "true"
+				with Not_found -> begin
+					false
+				end
+			in
 			match vm.Vm.ty with
 				| Vm.PV { vncterm = true; vncterm_ip = ip } -> Device.PV_Vnc.start ~xs ?ip di.Xenctrl.domid
+				| Vm.HVM _ -> if is_HVM_Linux vm then notify_unplug di.Xenctrl.domid
 				| _ -> ()
 		with Device.Ioemu_failed (name, msg) ->
 			raise (Failed_to_start_emulator (vm.Vm.id, name, msg))
