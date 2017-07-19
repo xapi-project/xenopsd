@@ -109,12 +109,14 @@ module VIF = struct
 	let set_pvs_proxy _ _ _ _ = unimplemented "VIF.set_pvs_proxy"
 	let get_state _ _ = unplugged_vif
 	let get_device_action_request _ _ = None
+	let get_vif_connection_status _ _ = ""
 end
 module VGPU = struct
 	let get_state _ _ = unplugged_vgpu
 end
 module UPDATES  = struct
 	let get _ _ = while true do Thread.delay 5. done; assert false
+	let event_wait task ?from ?timeout_start _ _ = false
 end
 module DEBUG = struct
 	let trigger _ _ = unimplemented "DEBUG.trigger"

@@ -134,12 +134,14 @@ module type S = sig
 		val get_state: Vm.id -> Vif.t -> Vif.state
 
 		val get_device_action_request: Vm.id -> Vif.t -> device_action_request option
+		val get_vif_connection_status:	Vm.id -> Vif.t -> string
 	end
 	module VGPU : sig
 		val get_state: Vm.id -> Vgpu.t -> Vgpu.state
 	end
 	module UPDATES : sig
 		val get: Updates.id option -> int option -> Dynamic.barrier list * Dynamic.id list * Updates.id
+		val event_wait: Xenops_task.task_handle -> ?from:int -> ?timeout_start:float -> float -> (Dynamic.id -> bool) -> bool
 	end
 	module DEBUG : sig
 		val trigger: string -> string list -> unit

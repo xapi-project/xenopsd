@@ -153,7 +153,7 @@ module WatchXenstore = functor(Actions: WATCH_ACTIONS) -> struct
 
                                 debug "Starting xenstore watch thread";
                                 register_for_watches ()
-			)
+					  )
 		with e ->
 		  debug "Caught exception attempting to watch xenstore: %s" (Printexc.to_string e);
 		  Xenctrl.interface_close xc;
