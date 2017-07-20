@@ -68,6 +68,7 @@ type atomic =
 	| VIF_set_ipv4_configuration of Vif.id * Vif.ipv4_configuration
 	| VIF_set_ipv6_configuration of Vif.id * Vif.ipv6_configuration
 	| VIF_set_active of Vif.id * bool
+	| VIF_inject_igmp_query of Vif.id
 	| VM_hook_script of (Vm.id * Xenops_hooks.script * string)
 	| VBD_plug of Vbd.id
 	| VBD_epoch_begin of (Vbd.id * disk * bool)
@@ -99,6 +100,7 @@ type atomic =
 	| VM_save of (Vm.id * flag list * data)
 	| VM_restore of (Vm.id * data)
 	| VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
+	| VM_add_task_of_inject_igmp_query of Vm.id
 	| Parallel of Vm.id * string * atomic list
 
 [@@deriving rpc]
@@ -1100,6 +1102,36 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			debug "VIF.set_active %s %b" (VIF_DB.string_of_id id) b;
 			B.VIF.set_active t (VIF_DB.vm_of id) (VIF_DB.read_exn id) b;
 			VIF_DB.signal id
+		| VIF_inject_igmp_query id ->
+			debug "VIF.inject_igmp_query %s" (VIF_DB.string_of_id id);
+			let (vmid, vifid) = id in
+			let module B = (val get_backend () : S) in
+			(* wait until vif connection status be "4", means connected *)
+			let f = function
+				| Dynamic.Vif (vmid', vifid') when (vmid' = vmid && vifid' = vifid) ->
+					debug "check vif status of %s" (VIF_DB.string_of_id id);
+					let vif = VIF_DB.read_exn id in
+					let status = B.VIF.get_vif_connection_status vif in
+					if status = "4" then
+						begin
+							debug "vif %s status change to '%s'" (VIF_DB.string_of_id id) status;
+							true
+						end else
+						begin
+							debug "vif %s status change to '%s'" (VIF_DB.string_of_id id) status;
+							false
+						end
+				| _ -> false
+			in
+			(* wait until vif reconnected of timeout *)
+			B.UPDATES.event_wait t 10.0 f |> ignore;
+			let vif = VIF_DB.read_exn id in
+			let interface = B.VIF.get_vif_interface_name vif in
+			let mac_address = vif.Vif.mac in
+			let script = "/etc/xapi.d/plugins/inject_igmp_query.py" in
+			(* FIXME: we should send IGMP query to all vlan that querier lives *)
+			debug "Inject IGMP query to %s with mac: %s vlanid: %s" interface mac_address "0";
+			ignore (Forkhelpers.execute_command_get_output script [interface; mac_address; "0"])
 		| VM_hook_script(id, script, reason) ->
 			Xenops_hooks.vm ~script ~reason ~id
 		| VBD_plug id ->
@@ -1278,6 +1310,14 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 		| VM_delay (id, t) ->
 			debug "VM %s: waiting for %.2f before next VM action" id t;
 			Thread.delay t
+		| VM_add_task_of_inject_igmp_query id ->
+			debug "Add inject igmp query task for VM %s" id;
+			let atom_id = Printf.sprintf "Parallel_inject_igmp_query.%s" id
+			in
+			let atom = Parallel (id, (Printf.sprintf "VIF.inject_igmp_query vm=%s" id),
+													 (List.map (fun vif -> VIF_inject_igmp_query vif.Vif.id) (VIF_DB.vifs id)))
+			in
+			queue_atomic_int ~progress_callback "queue atomic to send igmp query" atom_id atom |> ignore
 
 and queue_atomic_int ~progress_callback dbg id op =
 	let task = Xenops_task.add tasks dbg (let r = ref None in fun t -> perform_atomic ~progress_callback ~result:r op t; !r) in
@@ -1429,6 +1469,7 @@ and trigger_cleanup_after_failure_atom op t =
 		| VIF_set_locking_mode (id, _)
 		| VIF_set_pvs_proxy (id, _)
 		| VIF_set_ipv4_configuration (id, _)
+		| VIF_inject_igmp_query id
 		| VIF_set_ipv6_configuration (id, _) ->
 			immediate_operation dbg (fst id) (VIF_check_state id)
 
@@ -1457,6 +1498,7 @@ and trigger_cleanup_after_failure_atom op t =
 		| VM_s3resume id
 		| VM_save (id, _, _)
 		| VM_restore (id, _)
+		| VM_add_task_of_inject_igmp_query id
 		| VM_delay (id, _) ->
 			immediate_operation dbg id (VM_check_state id)
 		| Parallel (id, description, ops) ->
@@ -1622,12 +1664,15 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.task_handle) : unit
 				Handshake.recv_success ~verbose:true s;
 				debug "Synchronisation point 3";
 
-				perform_atomics ([
-				] @ (atomics_of_operation (VM_restore_devices (id, false))) @ [
-					VM_unpause id;
-					VM_set_domain_action_request(id, None);
-					VM_hook_script(id, Xenops_hooks.VM_post_migrate, Xenops_hooks.reason__migrate_dest);
-				]) t;
+				(* FIXME: we have to add check for IGMP snooping toggle *)
+				let toggle_of_inject_igmp_query = true in
+				perform_atomics ([] @
+					(atomics_of_operation (VM_restore_devices (id, false))) @ [
+						VM_unpause id;
+						VM_set_domain_action_request(id, None);
+					] @ if toggle_of_inject_igmp_query then [VM_add_task_of_inject_igmp_query id] else [] @ [
+						VM_hook_script(id, Xenops_hooks.VM_post_migrate, Xenops_hooks.reason__migrate_dest);
+					]) t;
 
 				Handshake.send s Handshake.Success;
 				debug "Synchronisation point 4";

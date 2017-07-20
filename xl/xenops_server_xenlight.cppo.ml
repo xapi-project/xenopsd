@@ -2804,6 +2804,7 @@ end
 
 module UPDATES = struct
 	let get last timeout = Updates.get "UPDATES.get" last timeout internal_updates
+	let event_wait = event_wait internal_updates
 end
 
 let _introduceDomain = "@introduceDomain"

@@ -2375,6 +2375,29 @@ module VIF = struct
 			with_xs (fun xs -> xs.Xs.read (active_path vm vif)) = "1"
 		with _ -> false
 
+	let get_frontend_domid_of_vif vif =
+		let vmid = fst vif.Vif.id in
+		let domid = match (with_xc_and_xs (fun xc xs -> domid_of_uuid ~xc ~xs Newest (uuid_of_string vmid))) with
+			| Some x -> x
+			| None -> raise (Does_not_exist ("domid_of_uuid", vmid))
+		in
+		domid
+
+	let vif_connection_status_path vif =
+		let domid = get_frontend_domid_of_vif vif in
+		Printf.sprintf "/local/domain/%d/device/vif/%s/state" domid (snd vif.Vif.id)
+
+	let get_vif_connection_status vif =
+		let status =
+		try
+			with_xs (fun xs -> xs.Xs.read (vif_connection_status_path vif))
+		with _ -> ""
+		in status
+
+	let get_vif_interface_name vif =
+		let domid = get_frontend_domid_of_vif vif in
+		Printf.sprintf "vif%d.%s" domid (snd vif.Vif.id)
+
 	let plug_exn task vm vif =
 		let vm_t = DB.read_exn vm in
 		(* If the vif isn't listed as "active" then we don't automatically plug this one in *)
@@ -2696,6 +2719,7 @@ end
 
 module UPDATES = struct
 	let get last timeout = Updates.get "UPDATES.get" last timeout internal_updates
+	let event_wait = event_wait internal_updates
 end
 
 module IntMap = Map.Make(struct type t = int let compare = compare end)
@@ -2887,6 +2911,9 @@ module Actions = struct
 				fire_event_on_device frontend kind devid;
 				(* If this event was a state change then this might be the first time we see evidence of PV drivers *)
 				if key = ["state"] then maybe_update_pv_drivers_detected ~xc ~xs (int_of_string frontend) path
+			| "local" :: "domain" :: frontend :: "device" :: "vif" :: devid :: _ ->
+				fire_event_on_device frontend "vif" devid;
+				look_for_different_devices (int_of_string frontend)
 			| "local" :: "domain" :: frontend :: "device" :: _ ->
 				look_for_different_devices (int_of_string frontend)
 			| "local" :: "domain" :: domid :: "rrd" :: name :: "ready" :: [] -> begin
