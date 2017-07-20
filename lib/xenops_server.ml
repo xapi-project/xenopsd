@@ -1104,14 +1104,14 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			VIF_DB.signal id
 		| VIF_inject_igmp_query id ->
 			debug "VIF.inject_igmp_query %s" (VIF_DB.string_of_id id);
-			let (vm, vif) = id in
+			let (vmid, vifid) = id in
 			let module B = (val get_backend () : S) in
 			(* wait until vif connection status be "4", means connected *)
 			let f = function
-				| Dynamic.Vif (vmid, devid) when (vmid = vm && devid = vif) ->
+				| Dynamic.Vif (vmid', vifid') when (vmid' = vmid && vifid' = vifid) ->
 					debug "check vif status of %s" (VIF_DB.string_of_id id);
 					let vif = VIF_DB.read_exn id in
-					let status = B.VIF.get_vif_connection_status vm vif in
+					let status = B.VIF.get_vif_connection_status vif in
 					if status = "4" then
 						begin
 							debug "vif %s status change to '%s'" (VIF_DB.string_of_id id) status;
@@ -1125,9 +1125,13 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			in
 			(* wait until vif reconnected of timeout *)
 			B.UPDATES.event_wait t 10.0 f |> ignore;
-			(* TODO: actions to send IGMP query *)
+			let vif = VIF_DB.read_exn id in
+			let interface = B.VIF.get_vif_interface_name vif in
+			let mac_address = vif.Vif.mac in
 			let script = "/etc/xapi.d/plugins/inject_igmp_query.py" in
-			ignore (Forkhelpers.execute_command_get_output script [])
+			(* FIXME: we should send IGMP query to all vlan that querier lives *)
+			debug "Inject IGMP query to %s with mac: %s vlanid: %s" interface mac_address "0";
+			ignore (Forkhelpers.execute_command_get_output script [interface; mac_address; "0"])
 		| VM_hook_script(id, script, reason) ->
 			Xenops_hooks.vm ~script ~reason ~id
 		| VBD_plug id ->
@@ -1660,7 +1664,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.task_handle) : unit
 				Handshake.recv_success ~verbose:true s;
 				debug "Synchronisation point 3";
 
-				(* TODO: we have to add check for IGMP snooping toggle *)
+				(* FIXME: we have to add check for IGMP snooping toggle *)
 				let toggle_of_inject_igmp_query = true in
 				perform_atomics ([] @
 					(atomics_of_operation (VM_restore_devices (id, false))) @ [

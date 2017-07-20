@@ -2375,19 +2375,28 @@ module VIF = struct
 			with_xs (fun xs -> xs.Xs.read (active_path vm vif)) = "1"
 		with _ -> false
 
-   let vif_connection_status_path vm vif =
-     let domid = match (with_xc_and_xs (fun xc xs -> domid_of_uuid ~xc ~xs Newest (uuid_of_string vm))) with
-       | Some x -> string_of_int x
-       | None -> raise (Does_not_exist ("domid_of_uuid", vm)) 
-     in
-     Printf.sprintf "/local/domain/%s/device/vif/%s/state" domid (snd vif.Vif.id)
+	let get_frontend_domid_of_vif vif =
+		let vmid = fst vif.Vif.id in
+		let domid = match (with_xc_and_xs (fun xc xs -> domid_of_uuid ~xc ~xs Newest (uuid_of_string vmid))) with
+			| Some x -> x
+			| None -> raise (Does_not_exist ("domid_of_uuid", vmid))
+		in
+		domid
 
-	 let get_vif_connection_status vm vif =
-		 let status =
-			 try
-				 with_xs (fun xs -> xs.Xs.read (vif_connection_status_path vm vif))
-			 with _ -> ""
-		 in status
+	let vif_connection_status_path vif =
+		let domid = get_frontend_domid_of_vif vif in
+		Printf.sprintf "/local/domain/%d/device/vif/%s/state" domid (snd vif.Vif.id)
+
+	let get_vif_connection_status vif =
+		let status =
+		try
+			with_xs (fun xs -> xs.Xs.read (vif_connection_status_path vif))
+		with _ -> ""
+		in status
+
+	let get_vif_interface_name vif =
+		let domid = get_frontend_domid_of_vif vif in
+		Printf.sprintf "vif%d.%s" domid (snd vif.Vif.id)
 
 	let plug_exn task vm vif =
 		let vm_t = DB.read_exn vm in

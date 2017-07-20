@@ -109,7 +109,8 @@ module VIF = struct
 	let set_pvs_proxy _ _ _ _ = unimplemented "VIF.set_pvs_proxy"
 	let get_state _ _ = unplugged_vif
 	let get_device_action_request _ _ = None
-	let get_vif_connection_status _ _ = ""
+	let get_vif_connection_status _ = ""
+	let get_vif_interface_name _ = ""
 end
 module VGPU = struct
 	let get_state _ _ = unplugged_vgpu

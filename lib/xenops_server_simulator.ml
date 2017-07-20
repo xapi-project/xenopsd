@@ -440,7 +440,8 @@ module VIF = struct
 	let get_state vm vif = Mutex.execute m (vif_state vm vif)
 
 	let get_device_action_request vm vif = None
-	let get_vif_connection_status vm vif = ""
+	let get_vif_connection_status vif = ""
+	let get_vif_interface_name vif = ""
 end
 
 module UPDATES = struct

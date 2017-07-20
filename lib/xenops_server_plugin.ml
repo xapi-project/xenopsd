@@ -134,7 +134,10 @@ module type S = sig
 		val get_state: Vm.id -> Vif.t -> Vif.state
 
 		val get_device_action_request: Vm.id -> Vif.t -> device_action_request option
-		val get_vif_connection_status:	Vm.id -> Vif.t -> string
+
+		val get_vif_connection_status: Vif.t -> string
+
+		val get_vif_interface_name: Vif.t -> string
 	end
 	module VGPU : sig
 		val get_state: Vm.id -> Vgpu.t -> Vgpu.state
