@@ -1555,7 +1555,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data extras =
+	let restore task progress_callback vm vbds vifs data extras inject_igmp_query =
 		on_domain
 			(fun xc xs task vm di ->
 				finally
@@ -1581,6 +1581,27 @@ module VM = struct
 									(fun fd ->
 										Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) ~timeoffset ~extras build_info (choose_xenguest vm.Vm.platformdata) domid fd
 									);
+								if inject_igmp_query then
+									try
+										let get_vif_interface_name vif =
+											let get_frontend_domid_of_vif vif =
+												let vmid = fst vif.Vif.id in
+												let domid = match (with_xc_and_xs (fun xc xs -> domid_of_uuid ~xc ~xs Newest (uuid_of_string vmid))) with
+													| Some x -> x
+													| None -> raise (Does_not_exist ("domid_of_uuid", vmid))
+												in
+												domid
+											in
+											let domid = get_frontend_domid_of_vif vif in
+											Printf.sprintf "vif%d.%s" domid (snd vif.Vif.id)
+										in
+										let script = "/usr/libexec/xenopsd/igmp_query_injector.py" in
+										let vif_names = List.map (fun vif -> get_vif_interface_name vif) vifs in
+										debug "Inject IGMP query to %s" (String.concat " " vif_names);
+										(* Call script to inject IGMP query asynchronously *)
+										Forkhelpers.execute_command_get_output script (["--detach"; "vif"; "--wait-vif-connected"; "10"] @ vif_names) |> ignore
+									with e ->
+										error "VM %s: inject IGMP query failed: %s" vm.Vm.id (Printexc.to_string e)
 							with e ->
 								error "VM %s: restore failed: %s" vm.Vm.id (Printexc.to_string e);
 								(* As of xen-unstable.hg 779c0ef9682 libxenguest will destroy the domain on failure *)
