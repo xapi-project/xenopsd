@@ -11,6 +11,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Lesser General Public License for more details.
  *)
+open Unix
 open Printf
 open Xenstore
 open Xenops_utils
@@ -351,3 +352,28 @@ let qmp_write_and_read domid ?(read_result=true) cmd  =
     (fun () -> Qmp_protocol.close c)
 
 let qmp_write domid cmd = qmp_write_and_read ~read_result:false domid cmd |> ignore
+
+type qmp_resource = {c: Qmp_protocol.t; in_c: in_channel; out_c: out_channel}
+
+module QmpPipe = struct
+	module H = Hashtbl
+	type t = (int, qmp_resource) H.t
+	let create () = H.create 16
+	let add tbl key value = H.add tbl key value
+	let remove tbl key = H.remove tbl key
+	let find tbl key = H.find tbl key
+end
+
+let qmp_pipe = QmpPipe.create ()
+
+let m = Mutex.create ()
+
+let with_qmp domid f = 
+	Mutex.execute m (
+		fun() -> (
+			let res = QmpPipe.find qmp_pipe domid in
+			let out_c = res.c in
+			let pipe_in = res.in_c in
+			f out_c pipe_in
+		)
+	)

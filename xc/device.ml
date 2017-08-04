@@ -12,6 +12,8 @@
  * GNU Lesser General Public License for more details.
  *)
 
+open Qmp
+open Unix
 open Printf
 
 open Xenops_utils
@@ -608,11 +610,32 @@ let qemu_media_change ~xs device _type params =
 	if is_upstream_qemu device.frontend.domid
 	then begin
 		let cd = "ide1-cd1" in
-		let qmp_cmd =
-			if params = ""
-			then (Qmp.Command(None, Qmp.Eject (cd, Some true)))
-			else (Qmp.Command(None, Qmp.Change (cd, params, None))) in
-		qmp_write device.frontend.domid qmp_cmd
+		match params with
+		| "" ->
+			with_qmp device.frontend.domid (
+				fun qmp_out pipe_in -> 
+					let qmp_cmd = Command(None, Eject (cd, Some true)) in
+					Qmp_protocol.write qmp_out qmp_cmd;
+					ignore(input_line pipe_in)
+				)
+		| _ -> 
+			with_qmp device.frontend.domid (
+				fun qmp_out pipe_in -> 
+					let fd_of_c = Qmp_protocol.to_fd qmp_out in
+					let fd_of_cd = Unix.openfile params [ Unix.O_RDONLY ] 0o640 in
+					ignore(Fd_send_recv.send_fd fd_of_c " " 0 1 [] fd_of_cd);
+										
+					let qmp_cmd = Command (None, Add_fd (Fd_send_recv.int_of_fd fd_of_cd)) in
+					Qmp_protocol.write qmp_out qmp_cmd;
+			
+					let new_fd = match message_of_string (input_line pipe_in) with
+					| Success (None, Fd_info fd_info) -> fd_info.fd
+					| _ -> raise (Internal_error (Printf.sprintf "Get unexpected result after sending Qmp message: %s" (string_of_message qmp_cmd)))
+					in
+					let cmd = Command (None, Blockdev_change_medium (cd, "/dev/fd/" ^ (string_of_int new_fd))) in
+					Qmp_protocol.write qmp_out cmd;
+					ignore(input_line pipe_in)
+			)
 	end
 
 let media_eject ~xs device =
@@ -899,8 +922,8 @@ module DaemonMgmt (D : DAEMONPIDPATH) = struct
 		let unset tbl key = H.remove tbl key
 		let has tbl key = H.mem tbl key
 	end
-	let signal_mask = SignalMask.create ()
 
+	let signal_mask = SignalMask.create ()
 	let pid_path = D.pid_path
 	let pid_path_signal domid = (pid_path domid) ^ "-signal"
 	let pid ~xs domid =
@@ -1461,17 +1484,15 @@ let get_vnc_port ~xs domid =
 	let is_upstream = is_upstream_qemu domid in
 	match is_running, is_upstream with
 	| true, false -> (try Some(int_of_string (xs.Xs.read (Generic.vnc_port_path domid))) with _ -> None)
-	| true, true  -> (
-		let open Qmp in
-		let qmp_cmd = Command (None, Query_vnc) in
-		let parse_qmp_message = function
-			| Success (None, Vnc vnc) -> (try Some vnc.service with _ -> None)
-			| _ -> debug "Get unexpected result after sending Qmp message: %s" (string_of_message qmp_cmd); None
-		in
-		let qmp_cmd_result = qmp_write_and_read domid qmp_cmd in
-		match qmp_cmd_result with
-		| Some qmp_message -> parse_qmp_message qmp_message
-		| None -> debug "Fail to get result after sending Qmp message: %s" (string_of_message qmp_cmd); None)
+	| true, true  ->
+			with_qmp domid (
+				fun qmp_out pipe_in -> 
+					let qmp_cmd = Command (None, Query_vnc) in
+					Qmp_protocol.write qmp_out qmp_cmd;
+					match message_of_string (input_line pipe_in) with
+					| Success (None, Vnc vnc) -> (try Some vnc.service with _ -> None)
+					| _ -> debug "Get unexpected result after sending Qmp message: %s" (string_of_message qmp_cmd); None
+			)
 	| _, _  -> None
 
 let get_tc_port ~xs domid =
@@ -1801,6 +1822,38 @@ let __start (task: Xenops_task.task_handle) ~xs ~dmpath ?(timeout = !Xenopsd.qem
 	let cancel = Cancel_utils.Qemu (qemu_domid, domid) in
 	let qemu_pid = init_daemon ~task ~path:dmpath ~args ~name:"qemu-dm" ~domid
 		~xs ~ready_path ~ready_val:"running" ~timeout ~cancel () in
+		
+	let qmp_thread domid =
+		let cc = Qmp_protocol.connect (Printf.sprintf "/var/run/xen/qmp-libxl-%d" domid) in
+		Qmp_protocol.negotiate cc;
+		
+		let (fd_in, fd_out) = Unix.pipe () in
+		let pipe_in = in_channel_of_descr fd_in in
+		let pipe_out = out_channel_of_descr fd_out in
+		
+		let res = {
+			Device_common.c = cc;
+			in_c = pipe_in;
+			out_c = pipe_out;
+		} in
+		
+		QmpPipe.add qmp_pipe domid res;
+
+		let event_queue = Queue.create () in
+		
+		while true do
+			let msg = Qmp_protocol.read cc  in 
+			match msg with
+			| Error _ | Success (_, _) -> 
+					output_string pipe_out (string_of_message msg);
+					output_string pipe_out "\n";
+					flush pipe_out
+			| Event e -> Queue.add e event_queue
+			| _ -> ()
+		done;
+		Qmp_protocol.close cc;
+	in
+	ignore(Thread.create qmp_thread domid);
 	match !Xenopsd.action_after_qemu_crash with
 	| None ->
 		(* At this point we expect qemu to outlive us; we will never call waitpid *)
@@ -1834,6 +1887,7 @@ let __start (task: Xenops_task.task_handle) ~xs ~dmpath ?(timeout = !Xenopsd.qem
 					(* before expected qemu stop: qemu-pid is available in domain xs tree: signal action to take *)
 					xs.Xs.write (Qemu.pid_path_signal domid) crash_reason
 		))
+
 
 let start (task: Xenops_task.task_handle) ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info false domid in
