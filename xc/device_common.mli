@@ -11,6 +11,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Lesser General Public License for more details.
  *)
+open Unix
 
 type kind = Vif | Tap | Pci | Vfs | Vfb | Vkbd | Vbd of string
 val vbd_kind_of_string : string -> kind
@@ -101,3 +102,17 @@ val xenops_vgpu_path: Xenctrl.domid -> devid -> string
 val is_upstream_qemu: Xenctrl.domid -> bool
 val qmp_write_and_read: Xenctrl.domid -> ?read_result:bool -> Qmp.message -> Qmp.message option
 val qmp_write: Xenctrl.domid -> Qmp.message -> unit
+
+type qmp_resource = {c: Qmp_protocol.t; in_c: in_channel; out_c: out_channel}
+
+module QmpPipe: sig	
+	type t
+	val create: unit -> t
+	val add: t -> int -> qmp_resource -> unit
+	val remove: t -> int -> unit
+	val find: t -> int -> qmp_resource
+end
+
+val qmp_pipe : QmpPipe.t
+
+val with_qmp : int -> (Qmp_protocol.t -> in_channel -> 'a) -> 'a
