@@ -28,6 +28,15 @@ sig
 	val get_private_key: xs:Xenstore.Xs.xsh -> device -> string -> string
 end
 
+module QMP :
+sig
+	module Events : sig
+		val add : int -> Qmp.event -> unit
+	end
+end
+
+val qmp_write_and_read: int -> Qmp_protocol.t -> Qmp.message -> Qmp.message
+
 module Vbd :
 sig
 	type mode = ReadOnly | ReadWrite
@@ -234,6 +243,7 @@ sig
 	val resume : Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> qemu_domid:int -> Xenctrl.domid -> unit
 	val stop : xs:Xenstore.Xs.xsh -> qemu_domid:int -> Xenctrl.domid -> unit
 end
+
 
 val get_vnc_port : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> int option
 val get_tc_port : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> int option
