@@ -21,11 +21,13 @@ open Device_common
 open Xenstore
 open Cancel_utils
 open Xenops_task
+open Qmp
 
 exception Ioemu_failed of (string * string)
 
 exception Device_shutdown
 exception Device_not_found
+exception QMP_receive_error of string
 
 exception Cdrom
 
@@ -282,6 +284,41 @@ end
 
 (****************************************************************************************)
 (** Disks:                                                                              *)
+
+module QMP = struct
+	module Events = struct
+		type event = { domid: int; event: Qmp.event }
+		let qmp_events = Queue.create ()
+		let m, c = Mutex.create(), Condition.create ()
+		let add domid event = Mutex.execute m (fun ()-> Queue.add {domid; event} qmp_events; Condition.signal c)
+		let next () =
+			Mutex.execute m ( fun ()->
+				while Queue.is_empty qmp_events do
+					Condition.wait c m
+				done;
+				Queue.pop qmp_events
+			)
+	end
+	let event_thread = Thread.create (fun ()->
+		while true do
+			match Events.next () with (* consume a qmp event or block until an event is available in the queue *)
+			| event -> () (* in the future, check for the event type and call the appropriate event handler function *)
+		done
+	)
+end
+
+let qmp_thread = QMP.event_thread ()
+
+let qmp_write_and_read domid c qmp_cmd = 
+	let rec qmp_read domid c =
+		let qmp_msg = Qmp_protocol.read c in
+		match qmp_msg with
+		| Error _ | Success (_, _) -> qmp_msg
+		| Event event -> QMP.Events.add domid event; qmp_read domid c
+		| _ -> raise (QMP_receive_error (Printf.sprintf "Get unexpected Qmp message: %s" (Qmp.string_of_message qmp_msg)))
+	in
+	Qmp_protocol.write c qmp_cmd;
+	qmp_read domid c
 
 module Vbd = struct
 
@@ -608,11 +645,32 @@ let qemu_media_change ~xs device _type params =
 	if is_upstream_qemu device.frontend.domid
 	then begin
 		let cd = "ide1-cd1" in
-		let qmp_cmd =
-			if params = ""
-			then (Qmp.Command(None, Qmp.Eject (cd, Some true)))
-			else (Qmp.Command(None, Qmp.Change (cd, params, None))) in
-		qmp_write device.frontend.domid qmp_cmd
+		let domid = device.frontend.domid in
+		match params with
+		| "" ->
+			with_qmp domid (fun c ->
+				let qmp_cmd = Command(None, Eject (cd, Some true)) in
+				match qmp_write_and_read domid c qmp_cmd with
+				| Success (None, Unit) -> ()
+				| _ -> raise (QMP_receive_error (Printf.sprintf "Get unexpected result after sending Qmp command: %s" (Qmp.string_of_message qmp_cmd)))
+			)
+		| _ ->
+			with_qmp domid (fun c ->
+				let fd_of_c = Qmp_protocol.to_fd c in
+				let fd_of_cd = Unix.openfile params [ Unix.O_RDONLY ] 0o640 in
+				ignore(Fd_send_recv.send_fd fd_of_c " " 0 1 [] fd_of_cd);
+				Unix.close fd_of_cd;
+					
+				let qmp_cmd = Command (None, Add_fd (Fd_send_recv.int_of_fd fd_of_cd)) in
+				let new_fd = match qmp_write_and_read domid c qmp_cmd with
+				| Success (None, Fd_info fd_info) -> fd_info.fd
+				| _ -> raise (QMP_receive_error (Printf.sprintf "Get unexpected result after sending Qmp command: %s" (string_of_message qmp_cmd)))
+				in
+				let qmp_cmd = Command (None, Blockdev_change_medium (cd, "/dev/fd/" ^ (string_of_int new_fd))) in
+				match qmp_write_and_read domid c qmp_cmd with
+				| Success (None, Unit) -> ()
+				| _ -> raise (QMP_receive_error (Printf.sprintf "Get unexpected result after sending Qmp Command: %s" (Qmp.string_of_message qmp_cmd)))
+			)
 	end
 
 let media_eject ~xs device =
@@ -1462,16 +1520,12 @@ let get_vnc_port ~xs domid =
 	match is_running, is_upstream with
 	| true, false -> (try Some(int_of_string (xs.Xs.read (Generic.vnc_port_path domid))) with _ -> None)
 	| true, true  -> (
-		let open Qmp in
-		let qmp_cmd = Command (None, Query_vnc) in
-		let parse_qmp_message = function
+		with_qmp domid (fun c -> 
+			let qmp_cmd = Command (None, Query_vnc) in
+			match qmp_write_and_read domid c qmp_cmd with
 			| Success (None, Vnc vnc) -> (try Some vnc.service with _ -> None)
-			| _ -> debug "Get unexpected result after sending Qmp message: %s" (string_of_message qmp_cmd); None
-		in
-		let qmp_cmd_result = qmp_write_and_read domid qmp_cmd in
-		match qmp_cmd_result with
-		| Some qmp_message -> parse_qmp_message qmp_message
-		| None -> debug "Fail to get result after sending Qmp message: %s" (string_of_message qmp_cmd); None)
+			| _ -> debug "Get unexpected result after sending Qmp command: %s" (string_of_message qmp_cmd); None
+		))
 	| _, _  -> None
 
 let get_tc_port ~xs domid =
@@ -1869,7 +1923,12 @@ let suspend (task: Xenops_task.task_handle) ~xs ~qemu_domid domid =
 	then signal task ~xs ~qemu_domid ~domid "save" ~wait_for:"paused"
 	else
 		let file = sprintf qemu_save_path domid in
-		qmp_write domid (Qmp.Command(None, Qmp.Xen_save_devices_state file))
+		with_qmp domid (fun c->
+			let qmp_cmd = Qmp.Command(None, Qmp.Xen_save_devices_state file) in
+			match qmp_write_and_read domid c qmp_cmd with
+			| Success (None, Unit) -> ()
+			| _ -> raise (QMP_receive_error (Printf.sprintf "Get unexpected result after sending Qmp command: %s" (Qmp.string_of_message qmp_cmd)))
+		)
 
 let resume (task: Xenops_task.task_handle) ~xs ~qemu_domid domid =
 	signal task ~xs ~qemu_domid ~domid "continue" ~wait_for:"running"

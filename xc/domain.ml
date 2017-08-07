@@ -1128,15 +1128,24 @@ let write_libxc_record' (task: Xenops_task.task_handle) ~xc ~xs ~hvm xenguest_pa
 	)
 
 let write_libxc_record (task: Xenops_task.task_handle) ~xc ~xs ~hvm xenguest_path domid uuid fd flags progress_callback qemu_domid do_suspend_callback =
+	let open Qmp in	
 	finally
 		(fun() ->
 			if is_upstream_qemu domid
-			then qmp_write domid (Qmp.Command(None, Qmp.Xen_set_global_dirty_log true));
+			then with_qmp domid (fun c -> 
+				let qmp_cmd = Qmp.Command(None, Qmp.Xen_set_global_dirty_log true) in
+				match Device.qmp_write_and_read domid c qmp_cmd with
+				| Success (None, Unit) -> ()
+				| _ -> debug "Get unexpected result after sending Qmp command: %s" (string_of_message qmp_cmd));
 			write_libxc_record' task ~xc ~xs ~hvm xenguest_path domid uuid fd flags progress_callback qemu_domid do_suspend_callback)
 		(fun() ->
 			if is_upstream_qemu domid
-			then qmp_write domid (Qmp.Command(None, Qmp.Xen_set_global_dirty_log false));
-		)
+			then with_qmp domid (fun c -> 
+				let qmp_cmd = Qmp.Command(None, Qmp.Xen_set_global_dirty_log false) in
+				match Device.qmp_write_and_read domid c qmp_cmd with
+				| Success (None, Unit) -> ()
+				| _ -> debug "Get unexpected result after sending Qmp command: %s" (string_of_message qmp_cmd)
+			))
 
 let write_qemu_record domid uuid legacy_libxc fd =
 	let file = sprintf qemu_save_path domid in
