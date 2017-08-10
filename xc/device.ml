@@ -621,16 +621,16 @@ let qemu_media_change ~xs device _type params =
 				finally
 					(fun () -> ignore(Fd_send_recv.send_fd fd_of_c " " 0 1 [] fd_of_cd))
 					(fun () -> Unix.close fd_of_cd);
-				
-				let qmp_cmd = Command (None, Add_fd (Fd_send_recv.int_of_fd fd_of_cd)) in
+
+				let qmp_cmd = Command (None, Add_fd None) in
 				Qmp_protocol.negotiate c;
 				Qmp_protocol.write c qmp_cmd;
-				let new_fd = match Qmp_protocol.read c with
-				| Success (None, Fd_info fd_info) -> fd_info.fd
+				let qmp_change_cd_cmd, qmp_remove_fdset_cmd = match Qmp_protocol.read c with
+				| Success (None, Fd_info fd_info) -> Command (None, Blockdev_change_medium (cd, "/dev/fdset/" ^ (string_of_int fd_info.fdset_id))), Command (None, Remove_fd fd_info.fdset_id)
 				| _ -> raise (Internal_error (Printf.sprintf "Get unexpected result after sending Qmp message: %s" (string_of_message qmp_cmd)))
 				in
-				let cmd = Command (None, Blockdev_change_medium (cd, "/dev/fd/" ^ (string_of_int new_fd))) in
-				Qmp_protocol.write c cmd;
+				Qmp_protocol.write c qmp_change_cd_cmd;
+				Qmp_protocol.write c qmp_remove_fdset_cmd;
 				Qmp_protocol.close c
 			with
 			| Unix.Unix_error(Unix.ECONNREFUSED, "connect", p) -> raise(Internal_error (Printf.sprintf "Failed to connnect qmp socket: %s" p))
