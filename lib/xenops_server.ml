@@ -97,7 +97,7 @@ type atomic =
 	| VM_s3suspend of Vm.id
 	| VM_s3resume of Vm.id
 	| VM_save of (Vm.id * flag list * data)
-	| VM_restore of (Vm.id * data * bool)
+	| VM_restore of (Vm.id * data)
 	| VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
 	| Parallel of Vm.id * string * atomic list
 
@@ -954,7 +954,7 @@ let rec atomics_of_operation = function
 			VM_create (id, None);
 		] @ [
 			VM_hook_script(id, Xenops_hooks.VM_pre_resume, Xenops_hooks.reason__none);
-			VM_restore (id, data, false);
+			VM_restore (id, data);
 		] @ (atomics_of_operation (VM_restore_devices (id, true))
 		) @ [
 			(* At this point the domain is considered survivable. *)
@@ -1255,7 +1255,7 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 		| VM_save (id, flags, data) ->
 			debug "VM.save %s" id;
 			B.VM.save t progress_callback (VM_DB.read_exn id) flags data
-		| VM_restore (id, data, inject_igmp_query) ->
+		| VM_restore (id, data) ->
 			debug "VM.restore %s" id;
 			if id |> VM_DB.exists |> not
 			then failwith (Printf.sprintf "%s doesn't exist" id);
@@ -1266,7 +1266,7 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			| pcis  ->
 				 let sbdfs = List.map (fun p -> Pci.string_of_address p.Pci.address) pcis in
 				 [ "-pci_passthrough"; String.concat "," sbdfs] in
-			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data extras inject_igmp_query
+			B.VM.restore t progress_callback (VM_DB.read_exn id) vbds vifs data extras
 		| VM_delay (id, t) ->
 			debug "VM %s: waiting for %.2f before next VM action" id t;
 			Thread.delay t
@@ -1295,7 +1295,7 @@ and queue_atomics_and_wait ~progress_callback ~max_parallel_atoms dbg id ops =
 (* Used to divide up the progress (bar) amongst atomic operations *)
 let weight_of_atomic = function
 	| VM_save (_, _, _) -> 10.
-	| VM_restore (_, _, _) -> 10.
+	| VM_restore (_, _) -> 10.
 	| _ -> 1.
 
 let progress_callback start len t y =
@@ -1417,7 +1417,7 @@ and trigger_cleanup_after_failure_atom op t =
 		| VM_s3suspend id
 		| VM_s3resume id
 		| VM_save (id, _, _)
-		| VM_restore (id, _, _)
+		| VM_restore (id, _)
 		| VM_delay (id, _) ->
 			immediate_operation dbg id (VM_check_state id)
 		| Parallel (id, description, ops) ->
@@ -1577,7 +1577,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.task_handle) : unit
 			debug "VM.receive_memory calling create";
 			perform_atomics (
 			[
-				VM_restore (id, FD s, true);
+				VM_restore (id, FD s);
 			]) t;
 			debug "VM.receive_memory restore complete";
 			debug "Synchronisation point 2";
