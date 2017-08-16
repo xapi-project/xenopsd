@@ -1559,7 +1559,7 @@ module VM = struct
 		let vif_names = List.map (fun vif -> Printf.sprintf "vif%d.%d" domid vif.Vif.position) vifs in
 		debug "Inject IGMP query to %s" (String.concat " " vif_names);
 		(* Call script to inject IGMP query asynchronously *)
-		Forkhelpers.execute_command_get_output !Xc_resources.igmp_query_injector_script (["--detach"; "vif"; "--wait-vif-connected"; string_of_int !Xenopsd.vif_ready_timeout] @ vif_names)
+		Forkhelpers.execute_command_get_output !Xc_resources.igmp_query_injector_script ("--detach" :: "vif" :: "--wait-vif-connected":: (string_of_int !Xenopsd.vif_ready_for_igmp_query_timeout) :: vif_names)
 
 	let restore task progress_callback vm vbds vifs data extras =
 		on_domain
@@ -1587,10 +1587,6 @@ module VM = struct
 									(fun fd ->
 										Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) ~timeoffset ~extras build_info (choose_xenguest vm.Vm.platformdata) domid fd
 									);
-								try
-									inject_igmp_query domid vifs |> ignore
-								with e ->
-									error "VM %s: inject IGMP query failed: %s" vm.Vm.id (Printexc.to_string e)
 							with e ->
 								error "VM %s: restore failed: %s" vm.Vm.id (Printexc.to_string e);
 								(* As of xen-unstable.hg 779c0ef9682 libxenguest will destroy the domain on failure *)
@@ -1607,7 +1603,11 @@ module VM = struct
 							let min = to_int (div vm.Vm.memory_dynamic_min 1024L)
 							and max = to_int (div vm.Vm.memory_dynamic_max 1024L) in
 							Domain.set_memory_dynamic_range ~xc ~xs ~min ~max domid
-						)
+						);
+						try
+							inject_igmp_query domid vifs |> ignore
+						with e ->
+							error "VM %s: inject IGMP query failed: %s" vm.Vm.id (Printexc.to_string e)
 					) (fun () -> clean_memory_reservation task di.Xenctrl.domid)
 			) Newest task vm
 
