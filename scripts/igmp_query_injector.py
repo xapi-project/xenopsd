@@ -217,7 +217,8 @@ class IGMPQueryGenerator(object):
         Multicast Address: 0.0.0.0
         """
         msg_type = 0x11
-        max_resp_time = self.max_resp_time
+        # MAX_RESP_TIME filed unit is 100ms
+        max_resp_time = self.max_resp_time / 100
         group_address = [0x00, 0x00, 0x00, 0x00]
         chksum = self._calc_igmp_chksum(msg_type, max_resp_time, group_address)
         ret = [msg_type, max_resp_time] + chksum + group_address
@@ -382,7 +383,7 @@ def build_parser():
     parser.add_argument('--detach', dest='detach', required=False, action='store_true',
                         help='execute this tool as a daemon')
     parser.add_argument('--max-resp-time', dest='max_resp_time', required=False, metavar='max_resp_time', type=int,
-                        default=1, help='max response time of IGMP query, unit is 100ms')
+                        default=100, help='max response time of IGMP query, unit is millisecond')
 
     subparsers = parser.add_subparsers()
     to_vif_parser = subparsers.add_parser('vif', help='inject query to vifs',
@@ -390,7 +391,7 @@ def build_parser():
     to_vif_parser.set_defaults(func=inject_to_vifs)
     to_vif_parser.add_argument('vifs', metavar='vif_name', nargs='+', help='vif interface name in Dom0')
     to_vif_parser.add_argument('--wait-vif-connected', dest='vif_connected_timeout', metavar='timeout', type=int,
-                               default=0, help='timeout value for waiting vif connected')
+                               default=0, help='timeout value for waiting vif connected, unit is second')
 
     to_bridge_parser = subparsers.add_parser('bridge', help='inject query to vifs on the bridge',
                                              description='Inject query to vifs on the bridge')
