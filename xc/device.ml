@@ -1950,3 +1950,66 @@ let get_tc_port ~xs domid =
 	if qemu_exists
 	then Dm.get_tc_port ~xs domid
 	else PV_Vnc.get_tc_port ~xs domid
+
+let qmp_event_tbl = Hashtbl.create 1000
+let event_qmp_tbl = Hashtbl.create 1000
+
+let qmp_event_thread () =
+	let qmp_socket_directory = "/var/run/xen/" in
+	let remove qmp =
+		if Hashtbl.mem qmp_event_tbl qmp
+		then begin
+			let c = Hashtbl.find qmp_event_tbl qmp in
+			Hashtbl.remove qmp_event_tbl qmp;
+			Hashtbl.remove event_qmp_tbl c;
+			Qmp_protocol.close c
+		end
+	in
+	
+	let add qmp =
+		let path = Filename.concat qmp_socket_directory qmp in
+		try
+			let c = Qmp_protocol.connect path in
+			Qmp_protocol.negotiate c;
+			Hashtbl.replace qmp_event_tbl qmp c;
+			Hashtbl.replace event_qmp_tbl c qmp;
+			debug "QMP %s: negotiation complete" qmp
+		with e ->
+			info "QMP %s: negotiation failed (%s): removing socket" qmp (Printexc.to_string e);
+			remove qmp
+	in
+	
+	while true do
+		let qmp_socket_array = Array.to_list (Sys.readdir qmp_socket_directory) in
+		let qmp_event_socket_list =
+			List.filter (
+				fun x -> try Scanf.sscanf x "qmp-event-libxl-%d" (fun _ -> true) with _ -> false
+			) qmp_socket_array
+		in
+		List.iter (
+			fun x ->
+				try match Hashtbl.find qmp_event_tbl x with _ -> ()
+				with Not_found -> add x
+		) qmp_event_socket_list;
+		
+		let cs = Hashtbl.fold (fun k v acc -> v :: acc) qmp_event_tbl [] in
+		let fds = List.map (fun x -> Qmp_protocol.to_fd x, x) cs in
+		let rs, _, _ = Unix.select (List.map fst fds) [] [] 5. in
+		List.iter (
+			fun fd ->
+				let c = List.assoc fd fds in
+				let qmp = Hashtbl.find event_qmp_tbl c in
+				let domid = Scanf.sscanf qmp "qmp-event-libxl-%d" (fun x -> x) in
+				try
+					let m = Qmp_protocol.read c in
+					match m with 
+					| Qmp.Event e -> debug "Receive QMP event %d: %s" domid (Qmp.string_of_message m)
+					| _ -> ()
+				with End_of_file ->
+					debug "QMP %d: End_of_file" domid;
+					remove qmp;
+		) rs;
+	done
+
+let init_qmp_event () =
+	ignore(Thread.create qmp_event_thread ())
