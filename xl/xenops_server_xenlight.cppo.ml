@@ -2607,7 +2607,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data extras =
+	let restore task progress_callback vm vbds vifs data vgpu_data extras =
 		with_xs (fun xs ->
 			with_data ~xs task data false (fun fd ->
 				let vbds = List.filter (fun vbd -> vbd.Vbd.mode = Vbd.ReadOnly) vbds in

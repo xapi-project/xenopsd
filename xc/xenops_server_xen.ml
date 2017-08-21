@@ -1566,7 +1566,7 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data extras =
+	let restore task progress_callback vm vbds vifs data vgpu_data extras =
 		on_domain
 			(fun xc xs task vm di ->
 				finally
@@ -1590,7 +1590,15 @@ module VM = struct
 							try
 								with_data ~xc ~xs task data false
 									(fun fd ->
-										Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) ~timeoffset ~extras build_info (choose_emu_manager vm.Vm.platformdata) domid fd
+										let vgpu_fd =
+											match vgpu_data with
+											| Some (FD vgpu_fd) -> Some vgpu_fd
+											| Some disk when disk = data -> Some fd (* Don't open the file twice *)
+											| Some other_disk -> None (* We don't support this *)
+											| None -> None
+										in
+										Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *)
+											~timeoffset ~extras build_info (choose_emu_manager vm.Vm.platformdata) domid fd vgpu_fd
 									);
 							with e ->
 								error "VM %s: restore failed: %s" vm.Vm.id (Printexc.to_string e);
