@@ -3074,6 +3074,9 @@ let init () =
 				info "Written %s to disable the hotplug/udev scripts" disable_udev_path;
 			)
 	end;
+
+	Device.init_qmp_event ();
+
 	(* XXX: is this completely redundant now? The Citrix PV drivers don't need this any more *)
 	(* Special XS entry looked for by the XenSource PV drivers (see xenagentd.hg:src/xad.c) *)
 	let xe_key = "/mh/XenSource-TM_XenEnterprise-TM" in
