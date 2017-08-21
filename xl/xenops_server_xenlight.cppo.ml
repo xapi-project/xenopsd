@@ -679,9 +679,7 @@ module PCI = struct
 end
 
 module VGPU = struct
-	let id_of vgpu = failwith "Not implemented"
-
-	let get_state vm vgpu = failwith "Not implemented"
+	include Xenops_server_skeleton.VGPU
 end
 
 let set_active_device path active =
