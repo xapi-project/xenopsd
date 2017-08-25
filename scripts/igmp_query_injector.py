@@ -9,7 +9,7 @@ from select import EPOLLIN, epoll
 import logging
 import signal
 import resource
-import xcp.logger as log
+from xcp import logger as log
 import time
 import sys
 import re
