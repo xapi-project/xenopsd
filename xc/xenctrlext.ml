@@ -40,3 +40,5 @@ external domain_get_runstate_info : handle -> int -> runstateinfo = "stub_xenctr
 external get_max_nr_cpus: handle -> int = "stub_xenctrlext_get_max_nr_cpus"
 
 external domain_set_target: handle -> domid -> domid -> unit = "stub_xenctrlext_domain_set_target"
+
+external domain_set_vcpu_hotplug: handle -> domid -> int -> unit = "stub_xenctrlext_domain_set_vcpu_hotplug"

@@ -1069,7 +1069,7 @@ module VM = struct
 		Domain.set_xsdata ~xs di.Xenctrl.domid xsdata
 	) Newest task vm
 
-	let set_vcpus task vm target = on_domain (fun xc xs _ _ di ->
+	let set_vcpus' task vm target = on_domain (fun xc xs _ _ di ->
 		let domid = di.Xenctrl.domid in
 		(* Returns the instantaneous CPU number from xenstore *)
 		let current =
@@ -1092,6 +1092,14 @@ module VM = struct
 				Device.Vcpu.set ~xs ~devid:i domid true
 			done
 		)
+	) Newest task vm
+
+	let set_vcpus task vm ncpus = on_domain (fun xc xs _ _ di ->
+		if Device_common.is_upstream_qemu di.Xenctrl.domid then begin
+			Xenctrlext.domain_set_vcpu_hotplug xc di.Xenctrl.domid ncpus;
+			set_vcpus' task vm ncpus
+		end else
+			set_vcpus' task vm ncpus
 	) Newest task vm
 
 	let set_shadow_multiplier task vm target = on_domain (fun xc xs _ _ di ->
