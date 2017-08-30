@@ -336,13 +336,24 @@ class BridgeInjector(IGMPQueryInjector):
 
 def inject_to_vifs(args):
     log.debug('Entry point: Inject IGMP query per pif')
-    injector = VifsInjector(args.max_resp_time, args.vifs, args.vif_connected_timeout)
+    vifs = []
+    for vif in args.vifs:
+        if not igmp_snooping_is_enabled_on_bridge_of_vif(vif):
+            log.info("IGMP snooping is disabled on bridge of interface %s, won't inject query" % vif)
+
+        vifs.append(vif)
+    injector = VifsInjector(args.max_resp_time, vifs, args.vif_connected_timeout)
     return injector.inject()
 
 
 def inject_to_vifs_on_bridges(args):
     log.debug('Entry point: Inject IGMP query per bridge')
-    injector = BridgeInjector(args.max_resp_time, args.bridges)
+    bridges = []
+    for bridge in args.bridges:
+        if not igmp_snooping_is_enabled_on_bridge(bridge):
+            log.info("IGMP snooping is disabled on bridge %s, won't inject query" % bridge)
+        bridges.append(bridge)
+    injector = BridgeInjector(args.max_resp_time, bridges)
     return injector.inject()
 
 
@@ -393,16 +404,19 @@ def _detach():
         sys.exit(1)
 
 
-def toggle_of_IGMP_snooping_is_enabled():
-    pool_uuid = subprocess.check_output(['/opt/xensource/bin/xe', 'pool-list', '--minimal']).strip()
-    toggle_state = subprocess.check_output(
-        ['/opt/xensource/bin/xe', 'pool-param-get', 'uuid=%s' % pool_uuid, 'param-name=igmp-snooping-enabled']).strip()
-    return toggle_state == 'true'
-
-
 def network_backend_is_openvswitch():
     bridge_type = subprocess.check_output(['/opt/xensource/bin/xe-get-network-backend']).strip()
     return bridge_type == 'openvswitch'
+
+
+def igmp_snooping_is_enabled_on_bridge(bridge):
+    enabled = subprocess.check_output(['/usr/bin/ovs-vsctl', 'get', 'bridge', bridge, 'mcast_snooping_enable']).strip()
+    return enabled == 'true'
+
+
+def igmp_snooping_is_enabled_on_bridge_of_vif(vif):
+    bridge = subprocess.check_output(['/usr/bin/ovs-vsctl', 'iface-to-br', vif]).strip()
+    return igmp_snooping_is_enabled_on_bridge(bridge)
 
 
 def main():
@@ -417,10 +431,6 @@ def main():
 
     if args.detach:
         _detach()
-
-    if not toggle_of_IGMP_snooping_is_enabled():
-        log.info('IGMP snooping is off, no need to inject query')
-        return ERRNO.SUCC
 
     if not network_backend_is_openvswitch():
         log.info('Network backend type is not openvswitch, no need to inject query')
