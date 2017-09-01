@@ -27,6 +27,7 @@
 #include <caml/fail.h>
 #include <caml/signals.h>
 #include <caml/callback.h>
+#include <caml/unixsupport.h>
 
 #define _H(__h) ((xc_interface *)(__h))
 #define _D(__d) ((uint32_t)Int_val(__d))
@@ -192,6 +193,29 @@ CAMLprim value stub_xenctrlext_domain_set_target(value xch,
 	int retval = xc_domain_set_target(_H(xch), _D(domid), _D(target));
 	if (retval)
 		failwith_xc(_H(xch));
+	CAMLreturn(Val_unit);
+}
+
+CAMLprim value stub_xenctrlext_domain_set_vcpu_hotplug(value xch, value domid, value ncpus)
+{
+	CAMLparam3(xch, domid, ncpus);
+
+	int ret, i, bytes;
+	uint8_t *map;
+
+	bytes = (_D(ncpus) + 7) / 8;
+	map = calloc(bytes, 1);
+	if (!map)
+		uerror("calloc fail", Nothing);
+
+	for (i = 0; i < _D(ncpus); i++)
+		map[i / 8] |= 1 << (i & 7);
+
+	ret = xc_acpi_iowrite(_H(xch), _D(domid), XEN_ACPI_CPU_MAP, bytes, map);
+	free(map);
+	if (ret < 0)
+		failwith_xc(_H(xch));
+
 	CAMLreturn(Val_unit);
 }
 
