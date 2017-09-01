@@ -161,7 +161,7 @@ Executable xenopsd_xc_main
     ezxenstore,
     profiling,
     qmp
-  CSources:           fsync_stubs.c, xenctrlext_stubs.c
+  CSources:           fsync_stubs.c, xenctrlext_stubs.c, epoll_stubs.c
 
 Executable xenopsd_simulator
   CompiledObject:     best
