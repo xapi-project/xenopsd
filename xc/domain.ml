@@ -802,6 +802,50 @@ let build (task: Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid ~t
 		            ~kernel:info.kernel ~cmdline:pvinfo.cmdline ~ramdisk:pvinfo.ramdisk
 		            ~vcpus:info.vcpus ~extras xenguest_path domid force
 
+let resume (task: Xenops_task.task_handle) ~xc ~xs ~hvm ~cooperative ~qemu_domid domid =
+	if not cooperative
+	then failwith "Domain.resume works only for collaborative domains";
+	Xenctrl.domain_resume_fast xc domid;
+	resume_post ~xc	~xs domid;
+	if hvm then Device.Dm.resume task ~xs ~qemu_domid domid
+
+type suspend_flag = Live | Debug
+
+module type SUSPEND_RESTORE = sig
+	val restore:
+		Xenops_task.task_handle
+		-> xc: Xenctrl.handle
+		-> xs: Xenstore.Xs.xsh
+		-> store_domid:int
+		-> console_domid:int
+		-> no_incr_generationid:bool
+		-> timeoffset:string
+		-> extras:string list
+		-> build_info
+		-> string
+		-> domid
+		-> Unix.file_descr
+		-> Unix.file_descr option
+		-> unit
+	val suspend:
+		Xenops_task.task_handle
+		-> xc: Xenctrl.handle
+		-> xs: Xenstore.Xs.xsh
+		-> hvm: bool
+		-> string
+		-> string
+		-> domid
+		-> Unix.file_descr
+		-> Unix.file_descr option
+		-> suspend_flag list
+		-> ?progress_callback: (float -> unit)
+		-> qemu_domid: int
+		-> (unit -> unit)
+		-> unit
+end
+
+module Suspend_restore_emu_manager : SUSPEND_RESTORE = struct
+
 let with_emu_manager_restore (task: Xenops_task.task_handle) ~hvm ~store_port ~console_port ~extras xenguest_path domid uuid main_fd vgpu_fd f =
 	let fd_uuid = Uuid.(to_string (create `V4)) in
 	let vgpu_args, vgpu_cmdline =
@@ -976,13 +1020,6 @@ let restore_common (task: Xenops_task.task_handle) ~xc ~xs ~hvm ~store_port ~sto
 		error "VM = %s; domid = %d; Error reading save signature: %s" (Uuid.to_string uuid) domid e;
 		raise Suspend_image_failure
 
-let resume (task: Xenops_task.task_handle) ~xc ~xs ~hvm ~cooperative ~qemu_domid domid =
-	if not cooperative
-	then failwith "Domain.resume works only for collaborative domains";
-	Xenctrl.domain_resume_fast xc domid;
-	resume_post ~xc	~xs domid;
-	if hvm then Device.Dm.resume task ~xs ~qemu_domid domid
-
 let pv_restore (task: Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid
 	~no_incr_generationid ~static_max_kib ~target_kib ~vcpus ~extras
 	xenguest_path domid fd vgpu_fd =
@@ -1074,8 +1111,6 @@ let restore (task: Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid
 	restore_fct ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid
 	            ~static_max_kib:info.memory_max ~target_kib:info.memory_target ~vcpus:info.vcpus ~extras
 	            xenguest_path domid fd vgpu_fd
-
-type suspend_flag = Live | Debug
 
 let suspend_emu_manager ~(task: Xenops_task.task_handle) ~xc ~xs ~hvm ~xenguest_path ~domid
 	~uuid ~main_fd ~vgpu_fd ~flags ~progress_callback ~qemu_domid ~do_suspend_callback =
@@ -1244,6 +1279,11 @@ let suspend (task: Xenops_task.task_handle) ~xc ~xs ~hvm xenguest_path vm_str do
 	| `Ok () ->
 		debug "VM = %s; domid = %d; suspend complete" (Uuid.to_string uuid) domid
 	| `Error e -> raise e
+
+end
+
+let restore = Suspend_restore_emu_manager.restore
+let suspend = Suspend_restore_emu_manager.suspend
 
 let send_s3resume ~xc domid =
 	let uuid = get_uuid ~xc domid in
