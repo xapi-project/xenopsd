@@ -1357,7 +1357,7 @@ module VM = struct
 
 	let create_device_model task vm vbds vifs vgpus saved_state = on_domain (create_device_model_exn vbds vifs vgpus saved_state) Newest task vm
 
-	let request_shutdown task vm reason ack_delay =
+	let request_shutdown task vm reason timeout =
 		let reason = shutdown_reason reason in
 		on_domain
 			(fun xc xs task vm di ->
@@ -1372,6 +1372,8 @@ module VM = struct
 				in
 
 				let reason = match reason, use_poweroff with Domain.Halt, true -> Domain.PowerOff | x, _ -> x in
+				let ack_delay = min timeout !Xenopsd.domain_shutdown_ack_timeout in
+				debug "domain shutdown ack timeout = %f" ack_delay;
 
 				try
 					Domain.shutdown ~xc ~xs domid reason;
