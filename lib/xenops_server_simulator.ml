@@ -368,7 +368,7 @@ module VM = struct
 	let build ?restore_fd _ vm vbds vifs vgpus extras force = Mutex.execute m (build_nolock vm vbds vifs vgpus extras)
 	let create_device_model _ vm vbds vifs vgpus _ = Mutex.execute m (create_device_model_nolock vm)
 	let destroy_device_model _ vm = Mutex.execute m (destroy_device_model_nolock vm)
-	let request_shutdown _ vm reason timeout = Mutex.execute m (request_shutdown_nolock vm reason)
+	let request_shutdown _ vm reason ack_delay = Mutex.execute m (request_shutdown_nolock vm reason)
 	let wait_shutdown _ vm reason timeout = true
 
 	let save _ cb vm flags data = Mutex.execute m (save_nolock vm flags data)
