@@ -20,6 +20,8 @@ open Xenops_task
 module D = Debug.Make(struct let name = "xenops_server" end)
 open D
 
+let domain_shutdown_ack_timeout = ref 60.
+
 type context = {
 	transferred_fd: Unix.file_descr option;
 	(** some API calls take a file descriptor argument *)
@@ -1236,11 +1238,11 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			B.VM.build t (VM_DB.read_exn id) vbds vifs vgpus extras force
 		| VM_shutdown_domain (id, reason, timeout) ->
 			debug "VM.shutdown_domain %s, reason = %s, timeout = %f, ack timeout = %f"
-				id (string_of_shutdown_request reason) timeout !Resources.domain_shutdown_ack_timeout;
+				id (string_of_shutdown_request reason) timeout !domain_shutdown_ack_timeout;
 			let start = Unix.gettimeofday () in
 			let vm = VM_DB.read_exn id in
 			(* wait for a clean shutdown ack; this allows us to abort early. *)
-			if not (B.VM.request_shutdown t vm reason (min !Resources.domain_shutdown_ack_timeout timeout))
+			if not (B.VM.request_shutdown t vm reason (min !domain_shutdown_ack_timeout timeout))
 			then raise (Failed_to_acknowledge_shutdown_request);
 			let remaining_timeout = max 0. (timeout -. (Unix.gettimeofday () -. start)) in
 			if not (B.VM.wait_shutdown t vm reason remaining_timeout)
