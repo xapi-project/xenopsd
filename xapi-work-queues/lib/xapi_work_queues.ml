@@ -13,7 +13,7 @@ module Queues = struct
 
   type 'a t = {
     mutable qs: 'a Queue.t StringMap.t;
-    mutable last_tag: string;
+    mutable last_tag: string; (* used for round-robin scheduling *)
     m: Mutex.t;
     c: Condition.t;
   }
