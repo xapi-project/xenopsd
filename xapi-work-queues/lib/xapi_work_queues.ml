@@ -129,19 +129,16 @@ module Make(I:Item) = struct
   type item = I.t
   let describe_item x = x |> I.describe |> Jsonrpc.to_string
   module Redirector = struct
-    type t = { queues: item Queues.t; mutex: Mutex.t }
-    let create () = { queues = Queues.create (); mutex = Mutex.create () }
+    type t = { queues: item Queues.t; mutex: Mutex.t; mutable overrides: item Queues.t StringMap.t; m: Mutex.t; }
+    let create () = { queues = Queues.create (); mutex = Mutex.create (); overrides = StringMap.empty; m = Mutex.create (); }
 
     (* When a thread is actively processing a queue, items are redirected to a thread-private queue *)
-    let overrides = ref StringMap.empty
-    let m = Mutex.create ()
-
     let push t tag item =
       Debug.with_thread_associated "queue"
         (fun () ->
-           Mutex.execute m
+           Mutex.execute t.m
              (fun () ->
-                let q, redirected = if StringMap.mem tag !overrides then StringMap.find tag !overrides, true else t.queues, false in
+                let q, redirected = if StringMap.mem tag t.overrides then StringMap.find tag t.overrides, true else t.queues, false in
                 debug "Queue.push %s onto %s%s:[ %s ]" (describe_item item) (if redirected then "redirected " else "") tag (String.concat ", " (List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get tag q))));
 
                 Queues.push_with_coalesce should_keep tag item q
@@ -155,22 +152,20 @@ module Make(I:Item) = struct
       Mutex.execute t.mutex
         (fun () ->
            let tag, item = Queues.pop t.queues in
-           Mutex.execute m
-             (fun () ->
-                let q = Queues.create () in
-                Queues.transfer_tag tag t.queues q;
-                overrides := StringMap.add tag q !overrides;
-                (* All items with [tag] will enter queue [q] *)
-                tag, q, item
+           Mutex.execute t.m (fun () ->
+               let q = Queues.create () in
+               Queues.transfer_tag tag t.queues q;
+               t.overrides <- StringMap.add tag q t.overrides;
+               (* All items with [tag] will enter queue [q] *)
+               tag, q, item
              )
         )
 
     let finished t tag queue =
-      Mutex.execute m
-        (fun () ->
-           Queues.transfer_tag tag queue t.queues;
-           overrides := StringMap.remove tag !overrides
-           (* All items with [tag] will enter the queues queue *)
+      Mutex.execute t.m (fun () ->
+          Queues.transfer_tag tag queue t.queues;
+          t.overrides <- StringMap.remove tag t.overrides
+          (* All items with [tag] will enter the queues queue *)
         )
 
     module Dump = struct
@@ -181,16 +176,15 @@ module Make(I:Item) = struct
       type t = q list [@@deriving rpc]
 
       let make redirectors =
-        Mutex.execute m
-          (fun () ->
-             let queues = List.rev_map (fun t -> t.queues) redirectors in
-             let one queue =
-               List.map
-                 (fun t ->
-                    { tag = t; items = List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get t queue)) }
-                 ) (Queues.tags queue) in
-             List.concat (List.map one (List.rev_append queues (List.map snd (StringMap.bindings !overrides))))
-          )
+        let queues = List.rev_map (fun t -> t.queues) redirectors in
+        let overrides = List.rev_map (fun t ->
+            List.map snd (StringMap.bindings t.overrides)) redirectors |> List.concat in
+        let one queue =
+          List.map
+            (fun t ->
+               { tag = t; items = List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get t queue)) }
+            ) (Queues.tags queue) in
+        List.concat (List.map one (List.rev_append queues overrides))
     end
   end
 
