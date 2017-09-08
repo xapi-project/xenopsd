@@ -27,8 +27,8 @@
           type task = Operation.t -> unit
           type t = Operation.t * task
 
-          let dump_item (op, _) = Rpc.rpc_of_string op
-          let dump_task _ = Rpc.rpc_of_unit ()
+          let describe (op, _) = Rpc.rpc_of_string op
+          let diagnostics _ = Rpc.rpc_of_unit ()
 
           let execute (op, f) = f op
 
@@ -39,10 +39,10 @@
 
       let () =
         let pool = WorkerPool.create 25 in
-        WorkerPool.push pool "tag1" (Start, Operation.execute);
-        WorkerPool.push pool "tag2" (Start, Operation.execute);
-        WorkerPool.push pool "tag2" (Stop, Operation.execute);
-        WorkerPool.push pool "tag1" (Stop, Operation.execute);
+        WorkerPool.push pool "tag1" ("Start" , Operation.execute);
+        WorkerPool.push pool "tag2" ("Start", Operation.execute);
+        WorkerPool.push pool "tag2" ("Stop", Operation.execute);
+        WorkerPool.push pool "tag1" ("Stop", Operation.execute);
         ...
     ]}
 *)
@@ -53,13 +53,13 @@ sig
   (** work item*)
   type t
 
-  (** [dump_item item] returns a short description of the operation
+  (** [describe item] returns a short description of the operation
       for debugging purposes *)
-  val dump_item : t -> Rpc.t
+  val describe : t -> Rpc.t
 
-  (** [dump_task t] dumps information about the task to execute, other than
+  (** [diagnostics t] dumps information about the task to execute, other than
       the operation defined above *)
-  val dump_task : t -> Rpc.t
+  val diagnostics : t -> Rpc.t
 
   (** [execute item] gets called to run the work item.
       Exceptions raised by [execute] get logged and ignored.

@@ -17,9 +17,9 @@ module Item = struct
     } [@@deriving rpc]
   end
 
-  let dump_item (op, _) = Rpc.rpc_of_string op
+  let describe (op, _) = Rpc.rpc_of_string op
 
-  let dump_task (_, (task:handle)) =
+  let diagnostics (_, (task:handle)) =
     Dump.rpc_of_t {Dump.id = task.id; tag = task.tag}
 
   let printer s = s
@@ -216,8 +216,8 @@ let check_schedule ctx schedule n ~workers =
 let test_rr ~workers ~events ~vms ctx =
   let module Item = struct
     type t = string * (unit -> unit) * (unit -> unit)
-    let dump_item (op, _, _) = Rpc.rpc_of_string op
-    let dump_task _ = Rpc.rpc_of_unit ()
+    let describe (op, _, _) = Rpc.rpc_of_string op
+    let diagnostics _ = Rpc.rpc_of_unit ()
 
     let execute (_, f, _) = f ()
     let finally (_, _, g) = g ()

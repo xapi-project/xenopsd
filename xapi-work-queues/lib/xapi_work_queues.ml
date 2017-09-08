@@ -101,8 +101,8 @@ end
 
 module type Item = sig
   type t
-  val dump_item : t -> Rpc.t
-  val dump_task : t -> Rpc.t
+  val describe : t -> Rpc.t
+  val diagnostics : t -> Rpc.t
   val execute : t -> unit
   val finally : t -> unit
   val should_keep : t -> t list -> bool
@@ -127,7 +127,7 @@ end
 module Make(I:Item) = struct
   open I
   type item = I.t
-  let describe_item x = x |> I.dump_item |> Jsonrpc.to_string
+  let describe_item x = x |> I.describe |> Jsonrpc.to_string
   module Redirector = struct
     type t = { queues: item Queues.t; mutex: Mutex.t }
     let create () = { queues = Queues.create (); mutex = Mutex.create () }
@@ -309,7 +309,7 @@ module Make(I:Item) = struct
              (fun t ->
                 match Worker.get_state t with
                 | Worker.Idle -> { state = "Idle"; task = None }
-                | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (dump_task item) }
+                | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (diagnostics item) }
                 | Worker.Shutdown_requested -> { state = "Shutdown_requested"; task = None }
                 | Worker.Shutdown -> { state = "Shutdown"; task = None }
              ) !pool
