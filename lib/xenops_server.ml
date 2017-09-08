@@ -400,6 +400,7 @@ module Item = struct
          Xenops_task.run handle
       ) ()
 
+  (* finally could be part of execute *)
   let finally (_, handle) =
     let id = Xenops_task.id_of_handle handle in
     begin match Xenops_task.get_state handle with
