@@ -5,28 +5,6 @@ open D
 
 module StringMap = Map.Make(struct type t = string let compare = compare end)
 
-let push_with_coalesce should_keep item queue =
-  (* [filter_with_memory p xs] returns elements [x \in xs] where [p (x_i, [x_0...x_i-1])] *)
-  let filter_with_memory p xs =
-    List.fold_left (fun (acc, xs) x -> xs :: acc, x :: xs) ([], []) xs
-    |> fst |> List.rev |> List.combine xs (* association list of (element, all previous elements) *)
-    |> List.filter p
-    |> List.map fst in
-
-  let to_list queue = Queue.fold (fun xs x -> x :: xs) [] queue |> List.rev in
-  let of_list xs =
-    let q = Queue.create () in
-    List.iter (fun x -> Queue.push x q) xs;
-    q in
-
-  Queue.push item queue;
-  let queue' =
-    to_list queue
-    |> filter_with_memory (fun (this, prev) -> should_keep this prev)
-    |> of_list in
-  Queue.clear queue;
-  Queue.transfer queue' queue
-
 module Queues = struct
   (** A set of queues where 'pop' operates on each queue in a round-robin fashion *)
 
@@ -59,11 +37,33 @@ module Queues = struct
          StringMap.fold (fun x _ acc -> x :: acc) qs.qs []
       )
 
+  let perform_push_with_coalesce should_keep item queue =
+    (* [filter_with_memory p xs] returns elements [x \in xs] where [p (x_i, [x_0...x_i-1])] *)
+    let filter_with_memory p xs =
+      List.fold_left (fun (acc, xs) x -> xs :: acc, x :: xs) ([], []) xs
+      |> fst |> List.rev |> List.combine xs (* association list of (element, all previous elements) *)
+      |> List.filter p
+      |> List.map fst in
+
+    let to_list queue = Queue.fold (fun xs x -> x :: xs) [] queue |> List.rev in
+    let of_list xs =
+      let q = Queue.create () in
+      List.iter (fun x -> Queue.push x q) xs;
+      q in
+
+    Queue.push item queue;
+    let queue' =
+      to_list queue
+      |> filter_with_memory (fun (this, prev) -> should_keep this prev)
+      |> of_list in
+    Queue.clear queue;
+    Queue.transfer queue' queue
+
   let push_with_coalesce should_keep tag item qs =
     Mutex.execute qs.m
       (fun () ->
          let q = if StringMap.mem tag qs.qs then StringMap.find tag qs.qs else Queue.create () in
-         push_with_coalesce should_keep item q;
+         perform_push_with_coalesce should_keep item q;
          qs.qs <- StringMap.add tag q qs.qs;
          Condition.signal qs.c
       )
