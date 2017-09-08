@@ -2315,7 +2315,7 @@ module Diagnostics = struct
   } [@@deriving rpc]
 
   let make () =
-    let queues, workers = WorkerQueues.dump [Redirector.default; Redirector.parallel_queues] in
+    let queues, workers = WorkerQueues.diagnostics [Redirector.default; Redirector.parallel_queues] in
     let module B = (val get_backend (): S) in {
       queues; workers;
       scheduler = Scheduler.Dump.make scheduler;

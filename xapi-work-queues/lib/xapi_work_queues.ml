@@ -121,7 +121,7 @@ module type S = sig
   val create : int -> t
   val set_size : t -> int -> unit
   val push : t -> string -> item -> unit
-  val dump : t list -> Rpc.t * Rpc.t
+  val diagnostics : t list -> Rpc.t * Rpc.t
 end
 
 module Make(I:Item) = struct
@@ -315,7 +315,7 @@ module Make(I:Item) = struct
              ) !pool
         )
   end
-  let dump redirectors =
+  let diagnostics redirectors =
     Redirector.Dump.(make redirectors |> rpc_of_t),
     Dump.(make () |> rpc_of_t)
 

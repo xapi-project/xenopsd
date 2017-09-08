@@ -101,8 +101,8 @@ module type S = sig
   *)
   val push : t -> string -> item -> unit
 
-  (** [dump pool] dumps diagnostic information about the pool *)
-  val dump : t list -> Rpc.t * Rpc.t
+  (** [diagnostics pool] dumps diagnostic information about the pool *)
+  val diagnostics : t list -> Rpc.t * Rpc.t
 end
 
 module Make : functor (I : Item) -> S with type item = I.t

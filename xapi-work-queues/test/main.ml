@@ -51,11 +51,11 @@ type running = {
 
 open Lib_worker
 
-let dump ctx t = 
+let dump ctx t =
   let log rpc =
     logf ctx `Info "%s" (Jsonrpc.to_string rpc)
   in
-  let r1, r2 = Lib_worker.dump [t] in
+  let r1, r2 = Lib_worker.diagnostics [t] in
   log r1;
   log r2
 
