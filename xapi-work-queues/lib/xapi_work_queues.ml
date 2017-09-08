@@ -253,7 +253,7 @@ module Make(I:Item) = struct
         shutdown_requested = false;
         m = Mutex.create ();
         c = Condition.create ();
-        t = None;
+        t = None; (* TODO: return a tuple from create to avoid making this an option *)
         redirector = redirector;
       } in
       let thread = Thread.create
@@ -287,7 +287,7 @@ module Make(I:Item) = struct
   type t = Redirector.t
 
   (* Store references to Worker.ts here *)
-  let pool = ref []
+  let pool = ref [] (* TODO: eliminate global state, pass as a parameter, declare once in xenopsd/xapi *)
   let m = Mutex.create ()
 
   module Dump = struct
