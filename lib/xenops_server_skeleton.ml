@@ -66,9 +66,7 @@ module VM = struct
 	let request_shutdown _ _ _ _ = unimplemented "VM.request_shutdown"
 	let wait_shutdown _ _ _ _ = unimplemented "VM.wait_shutdown"
 	let save _ _ _ _ _ _ = unimplemented "VM.save"
-	let restore _ _ _ _ _ _ = unimplemented "VM.restore"
-	let save_vgpu _ _ _ _ = unimplemented "VM.save_vgpu"
-	let restore_vgpu _ _ _ _ = unimplemented "VM.restore_vgpu"
+	let restore _ _ _ _ _ _ _ = unimplemented "VM.restore"
 	let s3suspend _ _ = unimplemented "VM.s3suspend"
 	let s3resume _ _ = unimplemented "VM.s3resume"
 	let get_state _ = Xenops_utils.halted_vm
@@ -114,6 +112,7 @@ module VIF = struct
 	let get_device_action_request _ _ = None
 end
 module VGPU = struct
+	let start _ _ _ _ = unimplemented "VGPU.start"
 	let get_state _ _ = unplugged_vgpu
 end
 module UPDATES  = struct

@@ -23,6 +23,8 @@ exception Domain_build_failed
 exception Domain_restore_failed
 exception Xenguest_protocol_failure of string (* internal protocol failure *)
 exception Xenguest_failure of string (* an actual error is reported to us *)
+exception Emu_manager_protocol_failure (* internal protocol failure *)
+exception Emu_manager_failure of string (* an actual error is reported to us *)
 exception Timeout_backend
 exception Could_not_read_file of string (* eg linux kernel/ initrd *)
 
@@ -135,38 +137,25 @@ val build: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xens
 (** resume a domain either cooperative or not *)
 val resume: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> hvm: bool -> cooperative: bool -> qemu_domid:int -> domid -> unit
 
-(** restore a PV domain into a fresh domain created with 'make' *)
-val pv_restore: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> store_domid:int -> console_domid:int -> no_incr_generationid:bool -> static_max_kib:Int64.t
-          -> target_kib:Int64.t -> vcpus:int -> extras:string list -> string -> domid -> Unix.file_descr
-          -> unit
-
-(** restore an HVM domain from the file descriptor into a fresh domain created
- *  with 'make' *)
-val hvm_restore: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> store_domid:int -> console_domid:int -> no_incr_generationid:bool -> static_max_kib:Int64.t
-             -> target_kib:Int64.t -> shadow_multiplier:float
-             -> vcpus:int -> timeoffset:string -> extras:string list
-             -> string -> domid -> Unix.file_descr
-             -> unit
-
 (** Restore a domain using the info provided *)
-val restore: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> store_domid:int -> console_domid:int -> no_incr_generationid:bool -> timeoffset:string -> extras:string list -> build_info -> string -> domid -> Unix.file_descr -> unit
-
-val restore_vgpu: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh ->
-	domid -> Unix.file_descr -> Xenops_interface.Vgpu.t -> int -> unit
+val restore: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh
+	-> store_domid:int -> console_domid:int -> no_incr_generationid:bool
+	-> timeoffset:string -> extras:string list -> build_info
+	-> xenguest_path:string -> emu_manager_path:string -> domid
+	-> Unix.file_descr -> Unix.file_descr option
+	-> unit
 
 type suspend_flag = Live | Debug
 
 (** suspend a domain into the file descriptor *)
-val suspend: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> hvm: bool -> string -> string -> domid
+val suspend: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh -> hvm: bool
+          -> xenguest_path:string -> emu_manager_path:string -> string -> domid
           -> Unix.file_descr
           -> Unix.file_descr option
           -> suspend_flag list
           -> ?progress_callback: (float -> unit)
 		  -> qemu_domid: int
           -> (unit -> unit) -> unit
-
-val suspend_vgpu: Xenops_task.Xenops_task.task_handle -> xc: Xenctrl.handle -> xs: Xenstore.Xs.xsh ->
-	domid -> Unix.file_descr -> unit
 
 (** send a s3resume event to a domain *)
 val send_s3resume: xc: Xenctrl.handle -> domid -> unit

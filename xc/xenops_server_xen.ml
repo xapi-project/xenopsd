@@ -36,6 +36,7 @@ let console_domid = 0
 
 let _device_model = "device-model"
 let _xenguest = "xenguest"
+let _emu_manager = "emu-manager"
 
 let run cmd args =
 	debug "%s %s" cmd (String.concat " " args);
@@ -61,6 +62,9 @@ let choose_qemu_dm x = choose_alternative _device_model !Resources.qemu_dm_wrapp
 
 (* We allow xenguest to be overriden via a platform flag *)
 let choose_xenguest x = choose_alternative _xenguest !Xc_resources.xenguest x
+
+(* We allow emu-manager to be overriden via a platform flag *)
+let choose_emu_manager x = choose_alternative _emu_manager !Xc_resources.emu_manager x
 
 
 type qemu_frontend =
@@ -1509,8 +1513,16 @@ module VM = struct
 				with_data ~xc ~xs task data true
 					(fun fd ->
 						let vm_str = Vm.sexp_of_t vm |> Sexplib.Sexp.to_string in
-						let vgpu_fd = match vgpu_data with Some (FD fd) -> Some fd | _ -> None in
-						Domain.suspend task ~xc ~xs ~hvm ~progress_callback ~qemu_domid (choose_xenguest vm.Vm.platformdata) vm_str domid fd vgpu_fd flags'
+						let vgpu_fd =
+							match vgpu_data with
+							| Some (FD vgpu_fd) -> Some vgpu_fd
+							| Some disk when disk = data -> Some fd (* Don't open the file twice *)
+							| Some other_disk -> None (* We don't support this *)
+							| None -> None
+						in
+						let xenguest_path = choose_xenguest vm.Vm.platformdata in
+						let emu_manager_path = choose_emu_manager vm.Vm.platformdata in
+						Domain.suspend task ~xc ~xs ~hvm ~progress_callback ~qemu_domid ~xenguest_path ~emu_manager_path vm_str domid fd vgpu_fd flags'
 							(fun () ->
 								(* SCTX-2558: wait more for ballooning if needed *)
 								wait_ballooning task vm;
@@ -1556,80 +1568,60 @@ module VM = struct
 					)
 			) Oldest task vm
 
-	let restore task progress_callback vm vbds vifs data extras =
+	let restore task progress_callback vm vbds vifs data vgpu_data extras =
 		on_domain
 			(fun xc xs task vm di ->
-                            finally
-                                (fun () ->
-				        let domid = di.Xenctrl.domid in
-				        let qemu_domid = Opt.default (this_domid ~xs) (get_stubdom ~xs domid) in
-				        let k = vm.Vm.id in
-				        let vmextra = DB.read_exn k in
-				        let (build_info, timeoffset) = match vmextra.VmExtra.persistent with
-				        	| { VmExtra.build_info = None } ->
-				        		error "VM = %s; No stored build_info: cannot safely restore" vm.Vm.id;
-				        		raise (Does_not_exist("build_info", vm.Vm.id))
-				        	| { VmExtra.build_info = Some x; VmExtra.ty } ->
-				        		let initial_target = get_initial_target ~xs domid in
-				        		let timeoffset = match ty with
-				        				Some x -> (match x with HVM hvm_info -> hvm_info.timeoffset | _ -> "")
-				        			| _ -> "" in
-				        		({ x with Domain.memory_target = initial_target }, timeoffset) in
-				        let no_incr_generationid = false in
-				        begin
-				        	try
+				finally
+					(fun () ->
+						let domid = di.Xenctrl.domid in
+						let qemu_domid = Opt.default (this_domid ~xs) (get_stubdom ~xs domid) in
+						let k = vm.Vm.id in
+						let vmextra = DB.read_exn k in
+						let (build_info, timeoffset) = match vmextra.VmExtra.persistent with
+							| { VmExtra.build_info = None } ->
+								error "VM = %s; No stored build_info: cannot safely restore" vm.Vm.id;
+								raise (Does_not_exist("build_info", vm.Vm.id))
+							| { VmExtra.build_info = Some x; VmExtra.ty } ->
+								let initial_target = get_initial_target ~xs domid in
+								let timeoffset = match ty with
+									| Some x -> (match x with HVM hvm_info -> hvm_info.timeoffset | _ -> "")
+									| _ -> "" in
+								({ x with Domain.memory_target = initial_target }, timeoffset) in
+						let no_incr_generationid = false in
+						begin
+							try
+								with_data ~xc ~xs task data false
+									(fun fd ->
+										let vgpu_fd =
+											match vgpu_data with
+											| Some (FD vgpu_fd) -> Some vgpu_fd
+											| Some disk when disk = data -> Some fd (* Don't open the file twice *)
+											| Some other_disk -> None (* We don't support this *)
+											| None -> None
+										in
+										let xenguest_path = choose_xenguest vm.Vm.platformdata in
+										let emu_manager_path = choose_emu_manager vm.Vm.platformdata in
+										Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *)
+											~timeoffset ~extras build_info ~xenguest_path ~emu_manager_path domid fd vgpu_fd
+									);
+							with e ->
+								error "VM %s: restore failed: %s" vm.Vm.id (Printexc.to_string e);
+								(* As of xen-unstable.hg 779c0ef9682 libxenguest will destroy the domain on failure *)
+								if try ignore(Xenctrl.domain_getinfo xc di.Xenctrl.domid); false with _ -> true then begin
+									try
+										debug "VM %s: libxenguest has destroyed domid %d; cleaning up xenstore for consistency" vm.Vm.id di.Xenctrl.domid;
+										Domain.destroy task ~xc ~xs ~qemu_domid di.Xenctrl.domid;
+									with e -> debug "Domain.destroy failed. Re-raising original error."
+								end;
+								raise e
+						end;
 
-				        		with_data ~xc ~xs task data false
-				        			(fun fd ->
-				        				Domain.restore task ~xc ~xs ~store_domid ~console_domid ~no_incr_generationid (* XXX progress_callback *) ~timeoffset ~extras build_info (choose_xenguest vm.Vm.platformdata) domid fd
-				        			);
-				        	with e ->
-				        		error "VM %s: restore failed: %s" vm.Vm.id (Printexc.to_string e);
-				        		(* As of xen-unstable.hg 779c0ef9682 libxenguest will destroy the domain on failure *)
-				        		if try ignore(Xenctrl.domain_getinfo xc di.Xenctrl.domid); false with _ -> true then begin
-				        			try
-				        				debug "VM %s: libxenguest has destroyed domid %d; cleaning up xenstore for consistency" vm.Vm.id di.Xenctrl.domid;
-				        				Domain.destroy task ~xc ~xs ~qemu_domid di.Xenctrl.domid;
-				        			with e -> debug "Domain.destroy failed. Re-raising original error."
-				        		end;
-				        		raise e
-				        end;
-
-				        Int64.(
-				        	let min = to_int (div vm.Vm.memory_dynamic_min 1024L)
-				        	and max = to_int (div vm.Vm.memory_dynamic_max 1024L) in
-				        	Domain.set_memory_dynamic_range ~xc ~xs ~min ~max domid
-				        )
-                                ) (fun () -> clean_memory_reservation task di.Xenctrl.domid)
-			) Newest task vm
-
-	let save_vgpu task vm vgpu data =
-		on_domain
-			(fun xc xs (task:Xenops_task.task_handle) vm di ->
-				let domid = di.Xenctrl.domid in
-				with_data ~xc ~xs task data true
-					(fun fd ->
-						Domain.suspend_vgpu task ~xc ~xs domid fd
-					)
-			) Oldest task vm
-
-	let restore_vgpu task vm vgpu data =
-		on_domain
-			(fun xc xs (task:Xenops_task.task_handle) vm di ->
-				let domid = di.Xenctrl.domid in
-				let k = vm.Vm.id in
-				let vmextra = DB.read_exn k in
-				let vcpus = match vmextra.VmExtra.persistent with
-					| { VmExtra.build_info = None } ->
-						error "VM = %s; No stored build_info: cannot safely restore" vm.Vm.id;
-						raise (Does_not_exist("build_info", vm.Vm.id))
-					| { VmExtra.build_info = Some build_info } ->
-						build_info.Domain.vcpus
-				in
-				with_data ~xc ~xs task data true
-					(fun fd ->
-						Domain.restore_vgpu task ~xc ~xs domid fd vgpu vcpus
-					)
+						Int64.(
+							let min = to_int (div vm.Vm.memory_dynamic_min 1024L)
+							and max = to_int (div vm.Vm.memory_dynamic_max 1024L) in
+							Domain.set_memory_dynamic_range ~xc ~xs ~min ~max domid
+						)
+					) (fun () -> clean_memory_reservation task di.Xenctrl.domid)
 			) Newest task vm
 
 	let s3suspend =
@@ -1957,6 +1949,20 @@ module VGPU = struct
 	open Vgpu
 
 	let id_of vgpu = snd vgpu.id
+
+	let start task vm vgpu saved_state =
+		on_frontend
+			(fun _ xs frontend_domid _ ->
+				let vmextra = DB.read_exn vm in
+				let vcpus = match vmextra.VmExtra.persistent with
+					| { VmExtra.build_info = None } ->
+						error "VM = %s; No stored build_info: cannot safely restore" vm;
+						raise (Does_not_exist("build_info", vm))
+					| { VmExtra.build_info = Some build_info } ->
+						build_info.Domain.vcpus
+				in
+				Device.Dm.restore_vgpu task ~xs frontend_domid vgpu vcpus
+			) Newest vm
 
 	let get_state vm vgpu =
 		on_frontend
