@@ -1075,7 +1075,7 @@ module VM = struct
 
 	let set_vcpus task vm target = on_domain (fun xc xs _ _ di ->
 		let domid = di.Xenctrl.domid in
-		Xenctrlext.domain_set_vcpu_hotplug xc domid target;
+		if di.Xenctrl.hvm_guest then Xenctrlext.domain_set_vcpu_hotplug xc domid target;
 		(* Returns the instantaneous CPU number from xenstore *)
 		let current =
 			let n = ref (-1) in
