@@ -1489,7 +1489,16 @@ module Dm = struct
 
     let qmp_event_handle domid qmp_event =
       (* This function will be extended to handle qmp events *)
-      debug "Got QMP event, domain-%d: %s" domid qmp_event.event
+      debug "Got QMP event, domain-%d: %s" domid qmp_event.event;
+      qmp_event.data >>= function
+      | RTC_CHANGE timeoffset ->
+        with_xs (fun xs ->
+          let timeoffset_key = sprintf "/vm/%s/rtc/timeoffset" (Uuidm.to_string (Xenops_helpers.uuid_of_domid ~xs domid)) in
+          try
+            let rtc = xs.Xs.read timeoffset_key in
+            xs.Xs.write timeoffset_key Int64.(add timeoffset (of_string rtc) |> to_string)
+          with e -> error "Failed to process RTC_CHANGE for domain %d: %s" domid (Printexc.to_string e)
+        )
 
     let qmp_event_thread () =
       while true do
@@ -1504,6 +1513,9 @@ module Dm = struct
                   | msg -> debug "Got non-event message, domain-%d: %s" domid (string_of_message msg)
                 with End_of_file ->
                   debug "domain-%d: end of file, close qmp socket" domid;
+                  remove domid
+                | e ->
+                  debug_exn (Printf.sprintf "domain-%d: close qmp socket" domid) e;
                   remove domid
               else begin
                 debug "EPOLL error on domain-%d, close qmp socket" domid;
