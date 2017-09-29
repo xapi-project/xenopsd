@@ -1816,6 +1816,10 @@ module Backend = struct
     (** Dm functions that use the dispatcher to choose between different profile backends *)
     module Dm: sig
 
+      module Event: sig
+        val init : unit -> unit
+      end
+
       (** [get_vnc_port xenstore domid] returns the dom0 tcp port in which the vnc server for [domid] can be found *)
       val get_vnc_port : xs:Xenstore.Xs.xsh -> int -> int option
 
@@ -1846,6 +1850,11 @@ module Backend = struct
 
     (** Implementation of the Dm functions that use the dispatcher for the qemu-trad backend *)
     module Dm = struct
+
+      module Event = struct
+        let init () = ()
+      end
+
       let get_vnc_port ~xs domid =
         Dm_Common.get_vnc_port ~xs domid ~f:(fun () ->
           (try Some(int_of_string (xs.Xs.read (Generic.vnc_port_path domid))) with _ -> None)
@@ -1879,7 +1888,7 @@ module Backend = struct
           qmp_write device.frontend.domid qmp_cmd
         else
           try
-            let c = Qmp_protocol.connect (Printf.sprintf "/var/run/xen/qmp-libxl-%d" device.frontend.domid) in
+            let c = Qmp_protocol.connect (qmp_libxl_path device.frontend.domid) in
             finally
               (fun () ->
                  let fd_of_c = Qmp_protocol.to_fd c in
@@ -1946,7 +1955,7 @@ module Backend = struct
           end
           let m = Monitor.create ()
 
-          let monitor_path domid = Printf.sprintf "/var/run/xen/qmp-event-%d" domid
+          let monitor_path domid = qmp_event_path domid
           let debug_exn msg e = debug "%s: %s" msg (Printexc.to_string e)
 
           let remove domid =
@@ -1986,6 +1995,11 @@ module Backend = struct
               )
 
           let qmp_event_thread () =
+            (* Add the existing qmp sockets first *)
+            Sys.readdir var_run_xen_path
+            |> Array.to_list
+            |> List.iter (fun x -> try Scanf.sscanf x "qmp-event-%d" add with _ -> ());
+
             while true do
               try
                 Monitor.wait m |> Monitor.with_event m (fun fd is_flag_in ->
@@ -2011,9 +2025,11 @@ module Backend = struct
                 debug_exn "Exception in qmp_event_thread: %s" e;
             done
 
-          let _init_qmp_event =
-            Thread.create qmp_event_thread ()
         end (* Qemu_upstream_compat.Dm.QMP_Event *)
+
+        module Event = struct
+          let init () = ignore(Thread.create QMP_Event.qmp_event_thread ())
+        end
 
       let get_vnc_port ~xs domid =
         Dm_Common.get_vnc_port ~xs domid ~f:(fun () ->
@@ -2089,6 +2105,9 @@ module Backend = struct
     | Profile.Qemu_upstream        -> (module Qemu_upstream        : Intf)
 
   let of_domid x = of_profile (Profile.of_domid x)
+
+  let init() =
+    Profile.all |> List.iter (fun p -> let module Q = (val of_profile p) in Q.Dm.Event.init() )
 end
 
 (*
