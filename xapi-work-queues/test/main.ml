@@ -60,9 +60,7 @@ let dump ctx t =
   log r2
 
 let test_pool ~workers ~vms ~events ?(errors=0) ctx =
-  let default = create 0 in
-  logf ctx `Info "Setting worker pool size to %d" workers;
-  set_size default workers;
+  let default = create workers in
   let open Item in
 
   let running = {
@@ -189,10 +187,10 @@ let check_schedule ctx schedule n ~workers =
           assert_failure (Printf.sprintf "%s -- [%d] @(%d, %d) scheduled too late, operation %d was already processed for other tags"
                             schedule_err (last_op - op) vm op last_op);
         op) (-1) schedule |> ignore;
-  (* check non-starvation properties when workers >= 1.
-     we must only schedule the same tag if there was no other schedulable tag at the time.
-     Operations on same tag must be executed in increasing order of operations.
-  *)
+    (* check non-starvation properties when workers >= 1.
+       we must only schedule the same tag if there was no other schedulable tag at the time.
+       Operations on same tag must be executed in increasing order of operations.
+    *)
     List.fold_left (fun (seen, tags_lastop) (tag, op, schedulable) ->
         begin try
             let lastop = IntMap.find tag tags_lastop in
@@ -254,12 +252,12 @@ let test_rr ~workers ~events ~vms ctx =
         decr pending;
         Condition.signal c;
         begin match vm_active.(vm) with
-        | Some other_op ->
-          assert_failure
-            (Printf.sprintf "Events for same tag must be serialized, but got conflict on (%d, %d) and (%d, %d)"
-               vm op vm other_op)
-        | None ->
-          vm_active.(vm) <- Some op;
+          | Some other_op ->
+            assert_failure
+              (Printf.sprintf "Events for same tag must be serialized, but got conflict on (%d, %d) and (%d, %d)"
+                 vm op vm other_op)
+          | None ->
+            vm_active.(vm) <- Some op;
         end;
       );
     Thread.yield ();
@@ -274,7 +272,7 @@ let test_rr ~workers ~events ~vms ctx =
     Mutex.execute m (fun () ->
         if op < vm_maxop.(vm) then
           schedulable := IntSet.add vm !schedulable;
-    )
+      )
   in
 
   let generate_operations vm =

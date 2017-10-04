@@ -379,11 +379,6 @@ module Test = struct
   let assert_tags ~msg ~expected actual =
     assert_equal ~msg ~printer:(String.concat ",") expected actual
 
-  let assert_string ~expected actual =
-    assert_equal ~printer:(fun x -> x) expected actual
-
-  let queues _ = Queues.create ()
-
   let test_empty_queues _ =
     let qs = Queues.create () in
     let dst = Queues.create () in
