@@ -209,34 +209,34 @@ module Make(I:Item) = struct
       | Processing of item
       | Shutdown_requested
       | Shutdown
-    type t = {
+    type worker_state = {
       mutable state: state;
       mutable shutdown_requested: bool;
       m: Mutex.t;
       c: Condition.t;
-      mutable t: Thread.t option;
       redirector: Redirector.t;
     }
+    type t = worker_state * Thread.t
 
     let get_state_locked t =
       if t.shutdown_requested && t.state <> Shutdown
       then Shutdown_requested
       else t.state
 
-    let get_state t =
+    let get_state (t, _) =
       Mutex.execute t.m
         (fun () ->
            get_state_locked t
         )
 
-    let join t =
+    let join (t, thread) =
       Mutex.execute t.m
         (fun () ->
            assert (t.state = Shutdown);
-           Opt.iter Thread.join t.t
+           Thread.join thread
         )
 
-    let is_active t =
+    let is_active (t, _) =
       Mutex.execute t.m
         (fun () ->
            match get_state_locked t with
@@ -244,7 +244,7 @@ module Make(I:Item) = struct
            | Shutdown_requested | Shutdown -> false
         )
 
-    let shutdown t =
+    let shutdown (t, _) =
       Mutex.execute t.m
         (fun () ->
            if not t.shutdown_requested then begin
@@ -253,7 +253,7 @@ module Make(I:Item) = struct
            end else false
         )
 
-    let restart t =
+    let restart (t, _) =
       Mutex.execute t.m
         (fun () ->
            if t.shutdown_requested && t.state <> Shutdown then begin
@@ -262,14 +262,13 @@ module Make(I:Item) = struct
            end else false
         )
 
-    let create redirector =
+    let create redirector : t =
       let t = {
         state = Idle;
         shutdown_requested = false;
         m = Mutex.create ();
         c = Condition.create ();
-        t = None; (* TODO: return a tuple from create to avoid making this an option *)
-        redirector = redirector;
+        redirector;
       } in
       let thread = Thread.create
           (fun () ->
@@ -295,8 +294,7 @@ module Make(I:Item) = struct
                  debug "Queue finally caught: %s" (Printexc.to_string e)
              done
           ) () in
-      t.t <- Some thread;
-      t
+      t, thread
   end
 
   type t = Redirector.t
@@ -328,6 +326,8 @@ module Make(I:Item) = struct
     Redirector.Dump.(make redirectors |> rpc_of_t),
     Dump.(make () |> rpc_of_t)
 
+  let redirector (w, _) = w.Worker.redirector
+
   (* Compute the number of active threads ie those which will continue to operate *)
   let count_active queues =
     Mutex.execute m
@@ -335,10 +335,10 @@ module Make(I:Item) = struct
          (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
             are only interested in comparing the equality of their static references
          *)
-         List.map (fun w -> w.Worker.redirector == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
+         List.map (fun w -> (redirector w) == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
       )
 
-  let find_one queues f = List.fold_left (fun acc x -> acc || (x.Worker.redirector == queues && (f x))) false
+  let find_one queues f = List.fold_left (fun acc x -> acc || ((redirector x) == queues && (f x))) false
 
   (* Clean up any shutdown threads and remove them from the master list *)
   let gc queues pool =
@@ -347,7 +347,7 @@ module Make(I:Item) = struct
          (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
             are only interested in comparing the equality of their static references
          *)
-         if w.Worker.redirector == queues && Worker.get_state w = Worker.Shutdown then begin
+         if (redirector w) == queues && Worker.get_state w = Worker.Shutdown then begin
            Worker.join w;
            acc
          end else w :: acc) [] pool
