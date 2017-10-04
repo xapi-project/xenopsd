@@ -31,8 +31,6 @@ module Item = struct
   let finally (op, t) =
     assert_equal ~printer t.id op;
     t.finally ()
-
-  let should_keep t _ = true
 end
 
 module Lib_worker = Xapi_work_queues.Make(Item)
@@ -187,10 +185,10 @@ let check_schedule ctx schedule n ~workers =
           assert_failure (Printf.sprintf "%s -- [%d] @(%d, %d) scheduled too late, operation %d was already processed for other tags"
                             schedule_err (last_op - op) vm op last_op);
         op) (-1) schedule |> ignore;
-  (* check non-starvation properties when workers >= 1.
-     we must only schedule the same tag if there was no other schedulable tag at the time.
-     Operations on same tag must be executed in increasing order of operations.
-  *)
+    (* check non-starvation properties when workers >= 1.
+       we must only schedule the same tag if there was no other schedulable tag at the time.
+       Operations on same tag must be executed in increasing order of operations.
+    *)
     List.fold_left (fun (seen, tags_lastop) (tag, op, schedulable) ->
         begin try
             let lastop = IntMap.find tag tags_lastop in
@@ -211,7 +209,7 @@ let check_schedule ctx schedule n ~workers =
 
 
 
-let test_rr ~workers ~events ~vms ctx =
+let test_rr ~workers ~events ~vms ~flood ctx =
   let module Item = struct
     type t = string * (unit -> unit) * (unit -> unit)
     let describe (op, _, _) = Rpc.rpc_of_string op
@@ -219,7 +217,6 @@ let test_rr ~workers ~events ~vms ctx =
 
     let execute (_, f, _) = f ()
     let finally (_, _, g) = g ()
-    let should_keep _ _ = true
   end in
   let module XWQ = Xapi_work_queues.Make(Item) in
   let open XWQ in
@@ -252,12 +249,12 @@ let test_rr ~workers ~events ~vms ctx =
         decr pending;
         Condition.signal c;
         begin match vm_active.(vm) with
-        | Some other_op ->
-          assert_failure
-            (Printf.sprintf "Events for same tag must be serialized, but got conflict on (%d, %d) and (%d, %d)"
-               vm op vm other_op)
-        | None ->
-          vm_active.(vm) <- Some op;
+          | Some other_op ->
+            assert_failure
+              (Printf.sprintf "Events for same tag must be serialized, but got conflict on (%d, %d) and (%d, %d)"
+                 vm op vm other_op)
+          | None ->
+            vm_active.(vm) <- Some op;
         end;
       );
     Thread.yield ();
@@ -272,13 +269,16 @@ let test_rr ~workers ~events ~vms ctx =
     Mutex.execute m (fun () ->
         if op < vm_maxop.(vm) then
           schedulable := IntSet.add vm !schedulable;
-    )
+      )
   in
 
   let generate_operations vm =
     let n =
       if vm = vms-1 then !available_events
-      else let lim = min !available_events limit in
+      else
+        (* if testing flood of events assign each VM just 2, and let the last VM generate the rest *)
+        let limit = if flood then 2 else limit in
+        let lim = min !available_events limit in
         if lim > 0 then Random.int lim else 0
     in
     available_events := !available_events - n;
@@ -332,7 +332,10 @@ let suite =
         List.rev_map (fun vms ->
             string_of_int vms >:::
             List.rev_map (fun events ->
-                string_of_int events >:: test_rr ~workers ~events ~vms
+                string_of_int events >:::
+                List.rev_map (fun flood ->
+                    string_of_bool flood >:: test_rr ~workers ~events ~vms ~flood
+                  ) [false; true]
               ) [0; 1; 3; 100; 1000 (*; 10000*)]
           ) [1; 10; 100; 500]
       ) [1; 3; 25]
