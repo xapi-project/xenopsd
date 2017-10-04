@@ -297,11 +297,11 @@ module Make(I:Item) = struct
       t, thread
   end
 
-  type t = Redirector.t
-
-  (* Store references to Worker.ts here *)
-  let pool = ref [] (* TODO: eliminate global state, pass as a parameter, declare once in xenopsd/xapi *)
-  let m = Mutex.create ()
+  type t = {
+    redirector: Redirector.t;
+    m: Mutex.t;
+    mutable pool: Worker.t list;
+  }
 
   module Dump = struct
     type w = {
@@ -309,8 +309,8 @@ module Make(I:Item) = struct
       task: Rpc.t option;
     } [@@deriving rpc]
     type t = w list [@@deriving rpc]
-    let make () =
-      Mutex.execute m
+    let make t =
+      Mutex.execute t.m
         (fun () ->
            List.map
              (fun t ->
@@ -319,74 +319,72 @@ module Make(I:Item) = struct
                 | Worker.Processing item -> { state = Printf.sprintf "Processing %s" (describe_item item); task = Some (diagnostics item) }
                 | Worker.Shutdown_requested -> { state = "Shutdown_requested"; task = None }
                 | Worker.Shutdown -> { state = "Shutdown"; task = None }
-             ) !pool
+             ) t.pool
         )
   end
   let diagnostics redirectors =
-    Redirector.Dump.(make redirectors |> rpc_of_t),
-    Dump.(make () |> rpc_of_t)
-
-  let redirector (w, _) = w.Worker.redirector
+    Redirector.Dump.(redirectors |> List.map (fun t -> t.redirector) |> make |> rpc_of_t),
+    Dump.(List.map make redirectors |> List.flatten |> rpc_of_t)
 
   (* Compute the number of active threads ie those which will continue to operate *)
-  let count_active queues =
-    Mutex.execute m
+  let count_active t =
+    Mutex.execute t.m
       (fun () ->
          (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
             are only interested in comparing the equality of their static references
          *)
-         List.map (fun w -> (redirector w) == queues && Worker.is_active w) !pool |> List.filter (fun x -> x) |> List.length
+         List.map (fun w -> Worker.is_active w) t.pool |> List.filter (fun x -> x) |> List.length
       )
 
-  let find_one queues f = List.fold_left (fun acc x -> acc || ((redirector x) == queues && (f x))) false
+  let find_one queues f = List.fold_left (fun acc x -> acc || (f x)) false
 
   (* Clean up any shutdown threads and remove them from the master list *)
-  let gc queues pool =
+  let gc pool =
     List.fold_left
       (fun acc w ->
          (* we do not want to use = when comparing queues: queues can contain (uncomparable) functions, and we
             are only interested in comparing the equality of their static references
          *)
-         if (redirector w) == queues && Worker.get_state w = Worker.Shutdown then begin
+         if Worker.get_state w = Worker.Shutdown then begin
            Worker.join w;
            acc
          end else w :: acc) [] pool
 
-  let incr queues =
+  let incr t =
     debug "Adding a new worker to the thread pool";
-    Mutex.execute m
+    Mutex.execute t.m
       (fun () ->
-         pool := gc queues !pool;
-         if not(find_one queues Worker.restart !pool)
-         then pool := (Worker.create queues) :: !pool
+         t.pool <- gc t.pool;
+         if not(find_one t.redirector Worker.restart t.pool)
+         then t.pool <- (Worker.create t.redirector) :: t.pool
       )
 
-  let decr queues =
+  let decr t =
     debug "Removing a worker from the thread pool";
-    Mutex.execute m
+    Mutex.execute t.m
       (fun () ->
-         pool := gc queues !pool;
-         if not(find_one queues Worker.shutdown !pool)
+         t.pool <- gc t.pool;
+         if not(find_one t.redirector Worker.shutdown t.pool)
          then debug "There are no worker threads left to shutdown."
       )
 
-  let set_size queues size =
-    let active = count_active queues in
+  let set_size t size =
+    let active = count_active t in
     debug "XXX active = %d" active;
     for i = 1 to max 0 (size - active) do
-      incr queues
+      incr t
     done;
     for i = 1 to max 0 (active - size) do
-      decr queues
+      decr t
     done
 
   let create ?should_keep n =
-    let t = Redirector.create ?should_keep () in
+    let t = { redirector = Redirector.create ?should_keep (); pool = []; m = Mutex.create () } in
     if n > 0 then
       set_size t n;
     t
 
-  let push = Redirector.push
+  let push t item = Redirector.push t.redirector item
 end
 
 module Test = struct
