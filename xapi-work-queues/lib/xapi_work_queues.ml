@@ -107,7 +107,6 @@ module type Item = sig
   val describe : t -> Rpc.t
   val diagnostics : t -> Rpc.t
   val execute : t -> unit
-  val finally : t -> unit
 end
 
 module type Dump = sig
@@ -287,11 +286,6 @@ module Make(I:Item) = struct
                    debug "Queue caught: %s" (Printexc.to_string e)
                end;
                Redirector.finished redirector tag queue;
-               (* The task must have succeeded or failed. *)
-               try
-                 finally item
-               with e ->
-                 debug "Queue finally caught: %s" (Printexc.to_string e)
              done
           ) () in
       t, thread

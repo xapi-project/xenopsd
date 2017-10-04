@@ -397,21 +397,20 @@ module Item = struct
       t'.Task.dbg
       (fun () ->
          debug "Task %s reference %s: %s" id t'.Task.dbg (string_of_operation op);
-         Xenops_task.run handle
-      ) ()
-
-  (* finally could be part of execute *)
-  let finally (_, handle) =
-    let id = Xenops_task.id_of_handle handle in
-    begin match Xenops_task.get_state handle with
-      | Task.Pending _ ->
-        error "Task %s has been left in a Pending state" id;
-        let e = Internal_error "Task left in Pending state" in
-        let e = e |> exnty_of_exn |> Exception.rpc_of_exnty in
-        Xenops_task.set_state handle (Task.Failed e)
-      | _ -> ()
-    end;
-    TASK.signal id
+         finally (fun () -> Xenops_task.run handle)
+           (fun () -> 
+              try
+                begin match Xenops_task.get_state handle with
+                  | Task.Pending _ ->
+                    error "Task %s has been left in a Pending state" id;
+                    let e = Internal_error "Task left in Pending state" in
+                    let e = e |> exnty_of_exn |> Exception.rpc_of_exnty in
+                    Xenops_task.set_state handle (Task.Failed e)
+                  | _ -> ()
+                end;
+                TASK.signal id
+              with e ->
+                debug "Queue finally caught: %s" (Printexc.to_string e))) ()
 end
 
 module WorkerQueues = Xapi_work_queues.Make(Item)

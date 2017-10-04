@@ -26,11 +26,7 @@ module Item = struct
 
   let execute (op, t) =
     assert_equal ~printer t.id op;
-    t.f ()
-
-  let finally (op, t) =
-    assert_equal ~printer t.id op;
-    t.finally ()
+    Stdext.Pervasiveext.finally t.f t.finally
 end
 
 module Lib_worker = Xapi_work_queues.Make(Item)
