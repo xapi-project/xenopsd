@@ -52,12 +52,15 @@ module Queues = struct
       q in
 
     Queue.push item queue;
-    let queue' =
-      to_list queue
-      |> filter_with_memory (fun (this, prev) -> should_keep this prev)
-      |> of_list in
-    Queue.clear queue;
-    Queue.transfer queue' queue
+    match should_keep with
+    | None -> ()
+    | Some should_keep ->
+      let queue' =
+        to_list queue
+        |> filter_with_memory (fun (this, prev) -> should_keep this prev)
+        |> of_list in
+      Queue.clear queue;
+      Queue.transfer queue' queue
 
   let push_with_coalesce should_keep tag item qs =
     Mutex.execute qs.m
@@ -105,7 +108,6 @@ module type Item = sig
   val diagnostics : t -> Rpc.t
   val execute : t -> unit
   val finally : t -> unit
-  val should_keep : t -> t list -> bool
 end
 
 module type Dump = sig
@@ -118,7 +120,7 @@ end
 module type S = sig
   type t
   type item
-  val create : int -> t
+  val create : ?should_keep:(item -> item list -> bool) -> int -> t
   val set_size : t -> int -> unit
   val push : t -> string -> item -> unit
   val diagnostics : t list -> Rpc.t * Rpc.t
@@ -129,8 +131,21 @@ module Make(I:Item) = struct
   type item = I.t
   let describe_item x = x |> I.describe |> Jsonrpc.to_string
   module Redirector = struct
-    type t = { queues: item Queues.t; mutex: Mutex.t; mutable overrides: item Queues.t StringMap.t; m: Mutex.t; }
-    let create () = { queues = Queues.create (); mutex = Mutex.create (); overrides = StringMap.empty; m = Mutex.create (); }
+    type t = {
+      queues: item Queues.t;
+      mutex: Mutex.t; (* mutex for Queue.pop *)
+      mutable overrides: item Queues.t StringMap.t;
+      m: Mutex.t; (* mutex for overrides *)
+      should_keep: (item -> item list -> bool) option;
+    }
+
+    let create ?should_keep () = {
+      queues = Queues.create ();
+      mutex = Mutex.create ();
+      overrides = StringMap.empty;
+      m = Mutex.create ();
+      should_keep;
+    }
 
     (* When a thread is actively processing a queue, items are redirected to a thread-private queue *)
     let push t tag item =
@@ -141,7 +156,7 @@ module Make(I:Item) = struct
                 let q, redirected = if StringMap.mem tag t.overrides then StringMap.find tag t.overrides, true else t.queues, false in
                 debug "Queue.push %s onto %s%s:[ %s ]" (describe_item item) (if redirected then "redirected " else "") tag (String.concat ", " (List.rev (Queue.fold (fun acc b -> describe_item b :: acc) [] (Queues.get tag q))));
 
-                Queues.push_with_coalesce should_keep tag item q
+                Queues.push_with_coalesce t.should_keep tag item q
              )
         ) ()
 
@@ -365,8 +380,8 @@ module Make(I:Item) = struct
       decr queues
     done
 
-  let create n =
-    let t = Redirector.create () in
+  let create ?should_keep n =
+    let t = Redirector.create ?should_keep () in
     if n > 0 then
       set_size t n;
     t
@@ -485,7 +500,7 @@ module Test = struct
           [vm1, 1; vm1, 2; vm1, 3; vm2, 1; vm2, 2; vm3, 1]
           input;
         List.iter (fun (t,i) ->
-            Queues.push_with_coalesce always t i qs
+            Queues.push_with_coalesce (Some always) t i qs
           ) input;
 
         let actual_tags = Queues.tags qs |> List.fast_sort compare in
@@ -517,19 +532,19 @@ module Test = struct
 
     [
       "pop, push" >:: with_thread (fun qs () ->
-          Queues.push_with_coalesce always mytag myitem qs;
+          Queues.push_with_coalesce None mytag myitem qs;
         );
 
       "push, pop" >:: (fun _ ->
           let qs = Queues.create () in
-          Queues.push_with_coalesce always mytag myitem qs;
+          Queues.push_with_coalesce None mytag myitem qs;
           assert_tags ~msg:"exactly 1 tag after push" ~expected:[mytag] (Queues.tags qs);
           with_one_pop_thread (mytag, myitem) qs ignore);
 
       "push, transfer, pop" >:: (fun _ ->
           let qs' = Queues.create () in
           with_thread (fun qs () ->
-              Queues.push_with_coalesce always mytag myitem qs';
+              Queues.push_with_coalesce None mytag myitem qs';
               assert_tags ~msg:"Exactly 1 tag present" ~expected:[mytag] (Queues.tags qs');
 
               Queues.transfer_tag mytag qs' qs;

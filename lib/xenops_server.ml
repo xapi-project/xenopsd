@@ -109,7 +109,7 @@ type atomic =
   | VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
   | Parallel of Vm.id * string * atomic list
 
-  [@@deriving rpc]
+[@@deriving rpc]
 
 let string_of_atomic x = x |> rpc_of_atomic |> Jsonrpc.to_string
 
@@ -134,7 +134,7 @@ type operation =
   | VIF_check_state of Vif.id
   | VUSB_check_state of Vusb.id
   | Atomic of atomic
-  [@@deriving rpc]
+[@@deriving rpc]
 
 let string_of_operation x = x |> rpc_of_operation |> Jsonrpc.to_string
 
@@ -412,6 +412,11 @@ module Item = struct
       | _ -> ()
     end;
     TASK.signal id
+end
+
+module WorkerQueues = Xapi_work_queues.Make(Item)
+module Redirector = struct
+  type t = WorkerQueues.t
 
   let should_keep (op, _) prev = match op with
     | VM_check_state (_)
@@ -422,13 +427,9 @@ module Item = struct
       let prev' = List.map fst prev in
       not(List.mem op prev')
     | _ -> true
-end
 
-module WorkerQueues = Xapi_work_queues.Make(Item)
-module Redirector = struct
-  type t = WorkerQueues.t
   (** The default queue should be used for all items, except see below *)
-  let default = WorkerQueues.create 0
+  let default = WorkerQueues.create ~should_keep 0
 
   (** We create another queue only for Parallel atoms so as to avoid a situation where
       Parallel atoms can not progress because all the workers available for the
@@ -476,11 +477,11 @@ let export_metadata vdi_map vif_map vgpu_pci_map id =
                                                                               List.map (remap_vdi vdi_map) pv_indirect_boot.Vm.devices } }
                            | Vm.PVinPVH pv_info ->
                              Vm.PVinPVH {pv_info with
-                                    Vm.boot = match pv_info.Vm.boot with
-                                      | Vm.Direct x -> pv_info.Vm.boot
-                                      | Vm.Indirect pv_indirect_boot ->
-                                        Vm.Indirect { pv_indirect_boot with Vm.devices =
-                                                                              List.map (remap_vdi vdi_map) pv_indirect_boot.Vm.devices } } } in
+                                         Vm.boot = match pv_info.Vm.boot with
+                                           | Vm.Direct x -> pv_info.Vm.boot
+                                           | Vm.Indirect pv_indirect_boot ->
+                                             Vm.Indirect { pv_indirect_boot with Vm.devices =
+                                                                                   List.map (remap_vdi vdi_map) pv_indirect_boot.Vm.devices } } } in
 
   let vbds = VBD_DB.vbds id in
   let vifs = List.map (fun vif -> remap_vif vif_map vif) (VIF_DB.vifs id) in
@@ -585,7 +586,7 @@ let rec atomics_of_operation = function
                   (* Plug USB device into HVM guests via qemu .*)
                  ) @ simplify (List.map (fun vusb -> VUSB_plug vusb.Vusb.id)
                                  (VUSB_DB.vusbs id)
-                 ) @ [
+                              ) @ [
       (* At this point the domain is considered survivable. *)
       VM_set_domain_action_request(id, None)
     ]
@@ -594,7 +595,7 @@ let rec atomics_of_operation = function
     (* When shutdown vm, need to unplug vusb from vm. *)
     ) @ (List.map (fun vusb -> VUSB_unplug vusb.Vusb.id)
            (VUSB_DB.vusbs id)
-    ) @ simplify ([
+        ) @ simplify ([
         (* At this point we have a shutdown domain (ie Needs_poweroff) *)
         VM_destroy_device_model id;
       ] @ (
@@ -1374,46 +1375,46 @@ and perform_exn ?subtask ?result (op: operation) (t: Xenops_task.task_handle) : 
 
       finally (fun ()->
 
-        (* If we have a vGPU, wait for the vgpu-1 ACK, which indicates that the vgpu_receiver_sync entry for
-           this vm id has already been initialised by the parallel receive_vgpu thread in this receiving host
-         *)
-        (match VGPU_DB.ids id with
-         | [] -> ()
-         | _  -> begin
-           Handshake.recv_success s;
-           debug "VM.receive_memory: Synchronisation point 1-vgpu ACK";
-           (* After this point, vgpu_receiver_sync is initialised by the corresponding receive_vgpu thread
-              and therefore can be used by this VM_receive_memory thread
-            *)
-         end
-        );
+          (* If we have a vGPU, wait for the vgpu-1 ACK, which indicates that the vgpu_receiver_sync entry for
+             this vm id has already been initialised by the parallel receive_vgpu thread in this receiving host
+          *)
+          (match VGPU_DB.ids id with
+           | [] -> ()
+           | _  -> begin
+               Handshake.recv_success s;
+               debug "VM.receive_memory: Synchronisation point 1-vgpu ACK";
+               (* After this point, vgpu_receiver_sync is initialised by the corresponding receive_vgpu thread
+                  and therefore can be used by this VM_receive_memory thread
+               *)
+             end
+          );
 
-        (try
-           perform_atomics (
-             simplify [VM_create (id, Some memory_limit);] @
-             (* Perform as many operations as possible on the destination domain before pausing the original domain *)
-             (atomics_of_operation (VM_restore_vifs id))
-           ) t;
-           Handshake.send s Handshake.Success
-         with e ->
-           Handshake.send s (Handshake.Error (Printexc.to_string e));
-           raise e
-        );
-        debug "VM.receive_memory: Synchronisation point 1";
+          (try
+             perform_atomics (
+               simplify [VM_create (id, Some memory_limit);] @
+               (* Perform as many operations as possible on the destination domain before pausing the original domain *)
+               (atomics_of_operation (VM_restore_vifs id))
+             ) t;
+             Handshake.send s Handshake.Success
+           with e ->
+             Handshake.send s (Handshake.Error (Printexc.to_string e));
+             raise e
+          );
+          debug "VM.receive_memory: Synchronisation point 1";
 
-        debug "VM.receive_memory restoring VM";
-        (* Check if there is a separate vGPU data channel *)
-        let vgpu_info = Stdext.Opt.of_exception (fun () -> Hashtbl.find vgpu_receiver_sync id) in
-        perform_atomics (
-          List.map (fun vgpu_id -> VGPU_start (vgpu_id, true)) (VGPU_DB.ids id) @ [
-            VM_restore (id, FD s, Opt.map (fun x -> FD x.vgpu_fd) vgpu_info);
-          ]) t;
-        debug "VM.receive_memory restore complete";
-      ) (fun ()->
-        (* Tell the vGPU receive thread that we're done, so that it can clean up vgpu_receiver_sync id and terminate *)
-        let vgpu_info = Stdext.Opt.of_exception (fun () -> Hashtbl.find vgpu_receiver_sync id) in
-        Opt.iter (fun x -> Event.send x.vgpu_channel () |> Event.sync) vgpu_info;
-      );
+          debug "VM.receive_memory restoring VM";
+          (* Check if there is a separate vGPU data channel *)
+          let vgpu_info = Stdext.Opt.of_exception (fun () -> Hashtbl.find vgpu_receiver_sync id) in
+          perform_atomics (
+            List.map (fun vgpu_id -> VGPU_start (vgpu_id, true)) (VGPU_DB.ids id) @ [
+              VM_restore (id, FD s, Opt.map (fun x -> FD x.vgpu_fd) vgpu_info);
+            ]) t;
+          debug "VM.receive_memory restore complete";
+        ) (fun ()->
+          (* Tell the vGPU receive thread that we're done, so that it can clean up vgpu_receiver_sync id and terminate *)
+          let vgpu_info = Stdext.Opt.of_exception (fun () -> Hashtbl.find vgpu_receiver_sync id) in
+          Opt.iter (fun x -> Event.send x.vgpu_channel () |> Event.sync) vgpu_info;
+        );
       debug "VM.receive_memory: Synchronisation point 2";
 
       begin try
@@ -2055,13 +2056,13 @@ module VM = struct
 
            (* prevent vgpu-migration from pre-Jura to Jura and later *)
            if not (List.mem_assoc cookie_vgpu_migration cookies) then
-               begin
-                  (* only Jura and later hosts send this cookie; fail the migration from pre-Jura hosts *)
-                  let msg = Printf.sprintf "VM.migrate: version of sending host incompatible with receiving host: no cookie %s" cookie_vgpu_migration in
-                  Xenops_migrate.(Handshake.send ~verbose:true transferred_fd (Handshake.Error msg));
-                  debug "VM.receive_vgpu: Synchronisation point 1-vgpu ERR %s" msg;
-                  raise (Internal_error msg)
-               end
+             begin
+               (* only Jura and later hosts send this cookie; fail the migration from pre-Jura hosts *)
+               let msg = Printf.sprintf "VM.migrate: version of sending host incompatible with receiving host: no cookie %s" cookie_vgpu_migration in
+               Xenops_migrate.(Handshake.send ~verbose:true transferred_fd (Handshake.Error msg));
+               debug "VM.receive_vgpu: Synchronisation point 1-vgpu ERR %s" msg;
+               raise (Internal_error msg)
+             end
            ;
 
            debug "VM.receive_vgpu: passed fd %d" (Obj.magic transferred_fd);
@@ -2307,21 +2308,21 @@ let register_objects () =
 
 module Diagnostics = struct
   type t = {
-		queues: Rpc.t;
-		workers: Rpc.t;
+    queues: Rpc.t;
+    workers: Rpc.t;
     scheduler: Scheduler.Dump.dump;
     updates: Updates.Dump.dump;
-		tasks: TaskDump.t list;
+    tasks: TaskDump.t list;
     vm_actions: (string * domain_action_request option) list;
   } [@@deriving rpc]
 
   let make () =
-                let queues, workers = WorkerQueues.diagnostics [Redirector.default; Redirector.parallel_queues] in
+    let queues, workers = WorkerQueues.diagnostics [Redirector.default; Redirector.parallel_queues] in
     let module B = (val get_backend (): S) in {
-                        queues; workers;
+      queues; workers;
       scheduler = Scheduler.Dump.make scheduler;
       updates = Updates.Dump.make updates;
-			tasks = List.map TaskDump.of_task (Xenops_task.list tasks);
+      tasks = List.map TaskDump.of_task (Xenops_task.list tasks);
       vm_actions = List.filter_map (fun id -> match VM_DB.read id with
           | Some vm -> Some (id, B.VM.get_domain_action_request vm)
           | None -> None

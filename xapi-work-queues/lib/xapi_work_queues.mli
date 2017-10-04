@@ -33,7 +33,6 @@
           let execute (op, f) = f op
 
           let finally _ = ()
-          let should_keep _ _ = true
         end)
 
 
@@ -73,12 +72,6 @@ sig
       Note that calls to [finally] are not serialised!
   *)
   val finally : t -> unit
-
-  (** [should_keep current previous]
-      Determines whether the current work item should be retained
-      knowing that the [previous] items in the queue exist.
-  *)
-  val should_keep : t -> t list -> bool
 end
 
 module type S = sig
@@ -86,8 +79,11 @@ module type S = sig
 
   type item (** work item *)
 
-  (** [create n] create a worker pool with [n] initial workers. *)
-  val create : int -> t
+  (** [create ?should_keep n] create a worker pool with [n] initial workers.
+      If [should_keep current previous] is provided it is used to coalesce work items,
+      it determines whether the [current] work item should be retained knowing that the [previous] items in the queue exist.
+  *)
+  val create : ?should_keep:(item -> item list -> bool) -> int -> t
 
   (** [set_size pool n] sets the worker [pool] size to [n]. *)
   val set_size : t -> int -> unit
