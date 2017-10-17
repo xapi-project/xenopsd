@@ -483,6 +483,9 @@ let destroy (task: Xenops_task.task_handle) ~xc ~xs ~qemu_domid domid =
 	(* Also zap any remaining cancellation paths in xenstore *)
 	Cancel_utils.cleanup_for_domain ~xs domid;
 
+	(* After domid is deleted from xenstore, no need for the profile backend caching *)
+	Device.Profile.Cache.remove domid;
+
 	(* Block waiting for the dying domain to disappear: aim is to catch shutdown errors early*)
 	let still_exists () =
 	  try

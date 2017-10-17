@@ -57,6 +57,27 @@ module Profile = struct
     | x -> debug "unknown device-model profile %s: defaulting to fallback: %s" x (string_of fallback);
        fallback
   let of_domid x = if is_upstream_qemu x then Qemu_upstream else Qemu_trad
+  module Cache = struct
+    let profiles_of_domids = Hashtbl.create 16
+    let m = Mutex.create ()
+    let add domid profile = Mutex.execute m (fun () ->
+      debug "adding profile %s for domid %d" (string_of profile) domid;
+      Hashtbl.replace profiles_of_domids domid profile
+    )
+    let remove domid = Mutex.execute m (fun () ->
+      debug "removing profile for domid %d" domid;
+      Hashtbl.remove profiles_of_domids domid
+    )
+    let of_domid domid = Mutex.execute m (fun () ->
+      try Hashtbl.find profiles_of_domids domid
+      with Not_found -> begin
+        let profile = of_domid domid in
+        debug "reloading profile %s for domid %d" (string_of profile) domid;
+        Hashtbl.replace profiles_of_domids domid profile;
+        profile
+      end
+    )
+  end
 end
 
 (* keys read by vif udev script (keep in sync with api:scripts/vif) *)
@@ -2099,7 +2120,7 @@ module Backend = struct
     | Profile.Qemu_upstream_compat -> (module Qemu_upstream_compat : Intf)
     | Profile.Qemu_upstream        -> (module Qemu_upstream        : Intf)
 
-  let of_domid x = of_profile (Profile.of_domid x)
+  let of_domid x = of_profile (Profile.Cache.of_domid x)
 
   let init() =
     Qemu_upstream.Dm.Event.init()
@@ -2129,6 +2150,7 @@ module Dm = struct
   include Dm_Common
 
   let init_daemon ~task ~path ~args ~name ~domid ~xs ~ready_path ?ready_val ~timeout ~cancel profile =
+    Profile.Cache.add domid profile;
     (* init_daemon must decide the backend based on a profile because the qemu daemon is not running
        at the moment and Backend.of_domid uses is_upstream_qemu which depends on a running qemu.
      *)
