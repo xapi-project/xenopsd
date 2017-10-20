@@ -47,6 +47,10 @@ module Profile: sig
 
 	(** [of_string  profile_name] returns the profile of a profile name, and [fallback] if an invalid name is provided. *)
 	val of_string : string -> t
+
+	module Cache: sig
+		val remove: int -> unit
+	end
 end
 
 module Generic :
