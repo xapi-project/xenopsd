@@ -889,9 +889,6 @@ let rec atomics_of_operation = function
 		]
 	| VM_shutdown (id, timeout) ->
 		(Opt.default [] (Opt.map (fun x -> [ VM_shutdown_domain(id, PowerOff, x) ]) timeout)
-		(* When shutdown vm, need to unplug vusb from vm. *)
-		) @ (List.map (fun vusb -> VUSB_unplug vusb.Vusb.id)
-			(VUSB_DB.vusbs id)
 		) @ simplify ([
 			(* At this point we have a shutdown domain (ie Needs_poweroff) *)
 			VM_destroy_device_model id;
@@ -1761,7 +1758,7 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.task_handle) : unit
 					Some Needs_unplug
 				end in
 			let operations_of_request = function
-				| Needs_unplug -> Some (Atomic(VBD_unplug (id, true)))
+				| Needs_unplug -> Some (Atomic(VUSB_unplug id))
 				| Needs_set_qos -> None in
 			let operations = List.filter_map operations_of_request (Opt.to_list request) in
 			List.iter (fun x -> perform x t) operations;
