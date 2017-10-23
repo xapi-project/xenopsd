@@ -964,8 +964,8 @@ module Suspend_restore_emu_manager : SUSPEND_RESTORE = struct
       in
       with_emu_manager_restore task ~hvm ~store_port ~console_port ~extras manager_path domid uuid main_fd vgpu_fd (fun cnx ->
           (* Maintain a list of results returned by emu-manager that are expected
-             			 * by the reader threads. Contains the emu for which a result is wanted
-             			 * plus an event channel for waking up the reader once the result is in. *)
+           * by the reader threads. Contains the emu for which a result is wanted
+           * plus an event channel for waking up the reader once the result is in. *)
           let thread_requests = ref [] in
           let thread_requests_m = Mutex.create () in
           let emu_manager_send_m = Mutex.create () in
