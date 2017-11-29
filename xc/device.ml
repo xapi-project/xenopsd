@@ -1409,29 +1409,42 @@ module Vkbd = struct
 end
 
 module Vusb = struct
-  let call_usb_reset hostbus hostport =
-    let usb_reset_script = "/opt/xensource/libexec/usb_reset.py" in
+  let cleanup domid =
     try
-      info "Reset USB device with hostbus %s and hostport %s before passthrough to vm." hostbus hostport;
-      ignore (Forkhelpers.execute_command_get_output usb_reset_script [ hostbus ^ "-" ^ hostport ])
+      let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script ["cleanup"; "-d"; string_of_int domid] in
+      debug "Got %s %s" stdout stderr
     with _ ->
-      error "Failed to reset USB device with hostbus %s and hostport %s." hostbus hostport;
+      warn "Failed to clean up VM %s" (string_of_int domid)
+
+  let call_usb_reset hostbus hostport domid pid action priv =
+    try
+      match action, priv with
+      | "attach", false ->
+        let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script [ "attach"; hostbus ^ "-" ^ hostport; "-d"; string_of_int domid; "-p"; string_of_int pid] in
+        debug "Got %s %s" stdout stderr
+      | "attach", true ->
+        (*When qemu is privileged, attach will only reset device.*)
+        let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script [ "attach"; hostbus ^ "-" ^ hostport; "-d"; string_of_int domid; "-p"; string_of_int pid; "-r"] in
+        debug "Got %s %s" stdout stderr
+      | "detach", false ->
+        let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script [ "detach"; hostbus ^ "-" ^ hostport ; "-d"; string_of_int domid; "-i"; "0" ; "0"; ] in
+        debug "Got %s %s" stdout stderr
+      | "detach", true -> () (*When qemu is privileged, detach will do nothing.*)
+      | _, _ -> () (*Invalid operation, will do nothing*)
+    with _ ->
+      error "Failed to %s USB device with hostbus %s and hostport %s." action hostbus hostport;
       failwith "Call to usb reset failed."
 
   let vusb_controller_plug ~xs ~domid ~driver ~driver_id =
     let is_running = Qemu.is_running ~xs domid in
-    match is_running with
-    | true  ->
+    if is_running then
       qmp_send_cmd domid Qmp.(Device_add (driver, driver_id, None)) |> ignore
-    | _ -> ()
 
-  let vusb_plug ~xs ~domid ~id ~hostbus ~hostport ~version =
+  let vusb_plug ~xs ~priv ~domid ~id ~hostbus ~hostport ~version =
     let device_model = Profile.of_domid domid in
     if device_model = Profile.Qemu_trad then
       raise (Internal_error (Printf.sprintf "Failed to plug VUSB %s because domain %d uses device-model profile %s." id domid (Profile.string_of device_model)));
     debug "Vusb plugged: vusb device %s plugged" id;
-    (* Need to reset USB device before passthrough to vm according to CP-24616 *)
-    call_usb_reset hostbus hostport;
     let get_bus v =
       if String.startswith "1" v then
         "usb-bus.0"
@@ -1444,22 +1457,34 @@ module Vusb = struct
       end
     in
     let is_running = Qemu.is_running ~xs domid in
-    match is_running with
-    | true  ->
-      let cmd = Qmp.(Device_add
-                       ( "usb-host"
-                       , id
-                       , Some (get_bus version, hostbus, hostport)
-                       ))
-      in qmp_send_cmd domid cmd |> ignore
-    | _ -> ()
+    if is_running then
+      begin
+        (* Need to reset USB device before passthrough to vm according to CP-24616.
+           Also need to do deprivileged work in usb_reset script if QEMU is deprivileged.
+        *)
+        begin match Qemu.pid ~xs domid with
+          | Some pid -> call_usb_reset hostbus hostport domid pid "attach" priv
+          | _ -> failwith "qemu pid does not exist"
+        end;
+        let cmd = Qmp.(Device_add
+                         ( "usb-host"
+                         , id
+                         , Some (get_bus version, hostbus, hostport)
+                         ))
+        in qmp_send_cmd domid cmd |> ignore
+      end
 
-  let vusb_unplug ~xs ~domid ~id =
+  let vusb_unplug ~xs ~priv ~domid ~id ~hostbus ~hostport=
     debug "Vusb unplugged: vusb device unplugged";
     let is_running = Qemu.is_running ~xs domid in
-    match is_running with
-    | true  -> qmp_send_cmd domid Qmp.(Device_del id) |> ignore
-    | _     -> ()
+    if is_running then
+      begin
+        qmp_send_cmd domid Qmp.(Device_del id) |> ignore;
+        (*Call vusb cleanup in usb_reset.py*)
+        match Qemu.pid ~xs domid with
+        | Some pid -> call_usb_reset hostbus hostport domid pid "detach" priv
+        | _ -> failwith "qemu pid does not exist"
+      end
 
   let qom_list ~xs ~domid =
     (*. 1. The QEMU Object Model(qom) provides a framework for registering user
@@ -1474,8 +1499,7 @@ module Vusb = struct
     *)
     debug "qom list to check if usb device is attached to vm";
     let is_running = Qemu.is_running ~xs domid in
-    match is_running with
-    | true  ->
+    if is_running then
       let path = "/machine/peripheral" in
       qmp_send_cmd domid Qmp.(Qom_list path)
       |> ( function
@@ -1485,7 +1509,8 @@ module Vusb = struct
               __LOC__ domid;
             []
         )
-    | _  -> []
+    else
+      []
 
 end
 
@@ -2227,7 +2252,9 @@ module Backend = struct
           Dm_Common.vnc_socket_path domid;
           (qmp_event_path domid);
           (qmp_libxl_path domid);
-        ] |> List.iter Socket.Unix.rm
+        ] |> List.iter Socket.Unix.rm;
+        (*VM cleanup*)
+        Vusb.cleanup domid
 
       let with_dirty_log domid ~f =
         finally

@@ -2035,20 +2035,33 @@ module VUSB = struct
        		   to release resources *)
     if not state.plugged then Some Needs_unplug else None
 
+  let is_privilege vm =
+    let open Vm in
+    let vmextra = DB.read_exn vm in
+    (* When pci_passthrough is true, the qemu will be privileged mode*)
+    match vmextra.VmExtra.persistent with
+    | {
+      VmExtra.build_info = Some build_info;
+      ty = Some (HVM hvm_info);
+    } -> hvm_info.pci_passthrough
+    | _ -> false
+
   let plug task vm vusb =
     on_frontend
       (fun xc xs frontend_domid hvm ->
          if not hvm
          then info "VM = %s; vusb device will no plug to  a PV guest" vm
          else
-           Device.Vusb.vusb_plug ~xs ~domid:frontend_domid ~id:(snd vusb.Vusb.id) ~hostbus:vusb.Vusb.hostbus ~hostport:vusb.Vusb.hostport ~version:vusb.Vusb.version;
+           let priv = is_privilege vm in
+           Device.Vusb.vusb_plug ~xs ~priv ~domid:frontend_domid ~id:(snd vusb.Vusb.id) ~hostbus:vusb.Vusb.hostbus ~hostport:vusb.Vusb.hostport ~version:vusb.Vusb.version
       ) Newest vm
 
   let unplug task vm vusb =
     try
       on_frontend
         (fun xc xs frontend_domid hvm ->
-           Device.Vusb.vusb_unplug ~xs ~domid:frontend_domid ~id:(snd vusb.Vusb.id);
+           let priv = is_privilege vm in
+           Device.Vusb.vusb_unplug ~xs ~priv ~domid:frontend_domid ~id:(snd vusb.Vusb.id) ~hostbus:vusb.Vusb.hostbus ~hostport:vusb.Vusb.hostport
         ) Newest vm
     with (Does_not_exist(_,_)) ->
       debug "VM = %s; VUSB = %s; Ignoring missing domain" vm (id_of vusb)

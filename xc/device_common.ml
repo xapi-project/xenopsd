@@ -334,6 +334,8 @@ let xenops_path_of_domain domid = sprintf "%s/%d" xenops_domain_path domid
 let xenops_vgpu_path domid devid =
   sprintf "%s/device/vgpu/%d" (xenops_path_of_domain domid) devid
 
+let usb_reset_script = "/opt/xensource/libexec/usb_reset.py"
+
 let is_upstream_qemu domid =
   try
     with_xs (fun xs -> xs.Xs.read (sprintf "/libxl/%d/dm-version" domid)) = "qemu_xen"
