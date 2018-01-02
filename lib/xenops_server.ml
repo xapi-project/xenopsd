@@ -16,6 +16,7 @@ open Xenops_interface
 open Xenops_server_plugin
 open Xenops_utils
 open Xenops_task
+open Xcp_pci
 
 module D = Debug.Make(struct let name = "xenops_server" end)
 open D

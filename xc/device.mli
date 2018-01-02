@@ -164,7 +164,7 @@ end
 
 module PCI :
 sig
-  open Xenops_interface.Pci
+  open Xcp_pci.Pci
 
   type t = {
     address: address;

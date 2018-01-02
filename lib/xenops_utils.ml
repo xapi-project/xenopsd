@@ -13,6 +13,7 @@
  *)
 
 open Xenops_interface
+open Xcp_pci
 
 let ( |> ) a b = b a
 

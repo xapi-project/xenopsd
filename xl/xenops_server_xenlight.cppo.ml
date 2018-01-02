@@ -22,6 +22,7 @@ open Xenops_helpers
 open Xenstore
 open Xenops_utils
 open Xenops_task
+open Xcp_pci
 
 module D = Debug.Make(struct let name = service_name end)
 open D

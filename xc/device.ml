@@ -942,13 +942,13 @@ module Vgpu = DaemonMgmt(struct let pid_path domid = sprintf "/local/domain/%d/v
 module PCI = struct
 
   type t = {
-    address: Xenops_interface.Pci.address;
+    address: Xcp_pci.Pci.address;
     irq: int;
     resources: (int64 * int64 * int64) list;
     driver: string;
   }
 
-  exception Cannot_add of Xenops_interface.Pci.address list * exn (* devices, reason *)
+  exception Cannot_add of Xcp_pci.Pci.address list * exn (* devices, reason *)
   exception Cannot_use_pci_with_no_pciback of t list
 
   (* same as libxl_internal: PROC_PCI_NUM_RESOURCES *)
@@ -967,7 +967,7 @@ module PCI = struct
                [
                  cmd;
                  string_of_int domid;
-                 Xenops_interface.Pci.string_of_address dev
+                 Xcp_pci.Pci.string_of_address dev
                ] in
            ()
          with e ->
@@ -996,7 +996,7 @@ module PCI = struct
     let pairs = List.map
         (fun x ->
            device_number_of_string x,
-           Xenops_interface.Pci.address_of_string (xs.Xs.read (path ^ "/" ^ x)))
+           Xcp_pci.Pci.address_of_string (xs.Xs.read (path ^ "/" ^ x)))
         all
     in
     (* Sort into the order the devices were plugged *)
@@ -1011,7 +1011,7 @@ module PCI = struct
         (fun count address ->
            xs.Xs.write
              (device_model_pci_device_path xs 0 domid ^ "/dev-" ^ string_of_int (next_idx + count))
-             (Xenops_interface.Pci.string_of_address address))
+             (Xcp_pci.Pci.string_of_address address))
         pcidevs
     with exn -> raise (Cannot_add (pcidevs, exn))
 
@@ -1174,7 +1174,7 @@ module PCI = struct
     Mutex.execute bind_lock (fun () ->
         List.iter
           (fun device ->
-             let devstr = Xenops_interface.Pci.string_of_address device in
+             let devstr = Xcp_pci.Pci.string_of_address device in
              let old_driver = get_driver devstr in
              match old_driver, new_driver with
              (* We want the driver which is already bound. *)
@@ -1206,7 +1206,7 @@ module PCI = struct
     do
       try
         let devstr = xs.Xs.read (backend_path ^ "/dev-" ^ (string_of_int i)) in
-        let dev = Xenops_interface.Pci.address_of_string devstr in
+        let dev = Xcp_pci.Pci.address_of_string devstr in
         devs.(i) <- Some dev
       with _ ->
         ()
@@ -1218,7 +1218,7 @@ module PCI = struct
       ) [] (Array.to_list devs))
 
   let reset ~xs address =
-    let devstr = Xenops_interface.Pci.string_of_address address in
+    let devstr = Xcp_pci.Pci.string_of_address address in
     debug "Device.Pci.reset %s" devstr;
     do_flr devstr
 
@@ -1729,7 +1729,7 @@ module Dm_Common = struct
     let base_args = [
       "--domain=" ^ (string_of_int domid);
       "--vcpus=" ^ (string_of_int vcpus);
-      "--gpu=" ^ (Xenops_interface.Pci.string_of_address pci);
+      "--gpu=" ^ (Xcp_pci.Pci.string_of_address pci);
       "--config=" ^ vgpu.config_file;
       "--suspend=" ^ suspend_file;
     ] in
@@ -1773,7 +1773,7 @@ module Dm_Common = struct
       failwith "Call to gimtool failed"
 
   let configure_gim ~xs physical_function vgpus_per_gpu framebufferbytes =
-    let pf = Xenops_interface.Pci.string_of_address physical_function in
+    let pf = Xcp_pci.Pci.string_of_address physical_function in
     (* gimtool must (only) be called when no VM is using the PF yet *)
     if not (mxgpu_device_in_use ~xs pf) then
       let vgpus = Int64.to_string vgpus_per_gpu in
@@ -2238,7 +2238,7 @@ module Dm = struct
            			 * nvidia driver. We rely on xapi to refrain from attempting to run
            			 * a vGPU on a device which is passed through to a guest. *)
         debug "start_vgpu: got VGPU with physical pci address %s"
-          (Xenops_interface.Pci.string_of_address pci);
+          (Xcp_pci.Pci.string_of_address pci);
         PCI.bind [pci] PCI.Nvidia;
         let args = vgpu_args_of_nvidia domid vcpus vgpu pci restore in
         let vgpu_pid = init_daemon ~task ~path:!Xc_resources.vgpu ~args
@@ -2268,7 +2268,7 @@ module Dm = struct
       Mutex.execute gimtool_m (fun () ->
           configure_gim ~xs pci vgpu.vgpus_per_pgpu vgpu.framebufferbytes;
           let keys = [
-            "pf", Xenops_interface.Pci.string_of_address pci;
+            "pf", Xcp_pci.Pci.string_of_address pci;
           ] in
           write_vgpu_data ~xs domid 0 keys
         )

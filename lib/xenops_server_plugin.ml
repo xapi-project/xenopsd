@@ -15,6 +15,7 @@
 open Xenops_interface
 open Xenops_utils
 open Xenops_task
+open Xcp_pci
 
 type domain_action_request =
   | Needs_poweroff
