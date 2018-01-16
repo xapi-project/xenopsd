@@ -449,14 +449,14 @@ module Mem = struct
 				with
 				| Unix.Unix_error(Unix.ECONNREFUSED, "connect", _) ->
 					error "Ballooning daemon has disappeared. Cannot query reservation_id for domid = %d" domid;
-					raise Memory_interface.(MemoryError No_reservation)
+					raise Memory_interface.No_reservation
 				| _ ->
 					error "Internal error. Cannot query reservation_id for domid = %d" domid;
-					raise Memory_interface.(MemoryError No_reservation)
+					raise Memory_interface.No_reservation
 			end
 		| None ->
 			info "No ballooning daemon. Cannot query reservation_id for domid = %d" domid;
-			raise Memory_interface.(MemoryError No_reservation)
+			raise Memory_interface.No_reservation
 
 	(** After an event which frees memory (eg a domain destruction), perform a one-off memory rebalance *)
 	let balance_memory dbg =
