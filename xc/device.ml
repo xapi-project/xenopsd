@@ -16,7 +16,6 @@ open Printf
 
 open Xenops_utils
 open Xenops_interface
-open Network_interface
 
 open Device_common
 open Xenstore
@@ -32,8 +31,6 @@ exception Cdrom
 
 module D = Debug.Make(struct let name = "xenops" end)
 open D
-
-module Net = Network_client.Client
 
 (** Definition of available qemu profiles, used by the qemu backend implementations *)
 module Profile = struct
@@ -795,12 +792,14 @@ module NetSriovVf = struct
 
   let add  ~xs ~devid ~mac ?mtu ?(rate=None) ?(backend_domid=0) ?(other_config=[]) 
       ~pci ~vlan ~carrier ?(extra_xenserver_keys=[]) (task: Xenops_task.task_handle) domid =
-    let open Xenops_interface.Pci in
+    let dbg = Printf.sprintf "Task %s reference %s"
+      (Xenops_task.id_of_handle task) (Xenops_task.to_interface_task task).Task.dbg
+    in 
     let vlan_str = match vlan with None -> "none" | Some vlan -> sprintf "%Ld" vlan in
     let rate_str = match rate with None -> "none" | Some (a, b) -> sprintf "(%Ld,%Ld)" a b in
-    debug "Device.NetSriovVf.add domid=%d devid=%d pci=%s vlan=%s mac=%s carrier=%b \
+    debug "%s: Device.NetSriovVf.add domid=%d devid=%d pci=%s vlan=%s mac=%s carrier=%b \
            rate=%s other_config=[%s] extra_xenserver_keys=[%s]" 
-      domid devid (string_of_address pci)  vlan_str mac carrier rate_str
+      dbg domid devid (Xenops_interface.Pci.string_of_address pci)  vlan_str mac carrier rate_str
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) other_config))
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) extra_xenserver_keys));
 
@@ -815,25 +814,26 @@ module NetSriovVf = struct
         | 0L -> Some 1L
         | rate -> Some rate)
     in
-    let open Network_interface.Sriov in
-    let net_sriov_vf_config = {
+    let net_sriov_vf_config = Network_interface.Sriov.{
       mac=Some mac; 
       vlan=vlan; 
       rate=rate_Mbps;}
     in
     begin
-      let ret = Net.Sriov.make_vf_config
-        "net_sriov:make_vf_config" ~pci_address:pci ~vf_info:net_sriov_vf_config in
+      let ret = Network_client.Client.Sriov.make_vf_config
+        (Printf.sprintf "%s: Sriov.make_vf_config" dbg)
+        ~pci_address:pci ~vf_info:net_sriov_vf_config
+      in
       let open Network_interface in
       match ret with
       | Ok -> ()
       | Error Config_vf_rate_not_supported ->
-        debug "It is not supported to configure rate on this network SR-IOV VF (pci:%s)"
-          (string_of_address pci)
+        debug "%s: It is not supported to configure rate on this network SR-IOV VF (pci:%s)"
+          dbg (Pci.string_of_address pci)
       | Error (Unknown s) ->
-        failwith (Printf.sprintf  "Failed to configure network SR-IOV VF \
+        failwith (Printf.sprintf "%s: Failed to configure network SR-IOV VF \
             (pci:%s) with mac=%s vlan=%s rate=%s: %s"
-            (string_of_address pci) mac vlan_str rate_str s)
+            dbg (Pci.string_of_address pci) mac vlan_str rate_str s)
     end;
     device
 

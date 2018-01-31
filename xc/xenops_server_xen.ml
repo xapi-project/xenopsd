@@ -1899,17 +1899,19 @@ module PCI = struct
 
   let id_of pci = snd pci.id
 
-  let get_state vm pci =
+  let get_state' vm pci_addr =
     with_xc_and_xs
       (fun xc xs ->
          let all = match domid_of_uuid ~xc ~xs Newest (uuid_of_string vm) with
            | Some domid -> Device.PCI.list ~xs domid |> List.map snd
            | None -> [] in
-         let address = pci.address in
          {
-           plugged = List.mem address all
+           plugged = List.mem pci_addr all
          }
       )
+
+  let get_state vm pci =
+    get_state' vm pci.address
 
   let get_device_action_request vm pci =
     let state = get_state vm pci in
@@ -2564,31 +2566,33 @@ module VIF = struct
          try
            (* If the device is gone then this is ok *)
            let device = device_by_id xc xs vm Device_common.Vif Oldest (id_of vif) in
-           match vif.backend with
-           | Network.Local _ | Network.Remote _ ->
-             (* If the device is gone then this is ok *)
-             let destroy device =
-               (* NB different from the VBD case to make the test pass for now *)
-               Xenops_task.with_subtask task (Printf.sprintf "Vif.hard_shutdown %s" (id_of vif))           
-                 (fun () -> (if force then Device.hard_shutdown else Device.clean_shutdown) task ~xs device);
-               Xenops_task.with_subtask task (Printf.sprintf "Vif.release %s" (id_of vif))
-                 (fun () -> Device.Vif.release task ~xc ~xs device) in
-             destroy device;
-             Opt.iter (fun vm_t ->
-                 (* If we have a qemu frontend, detach this too. *)
-                 if List.mem_assoc vif.Vif.id vm_t.VmExtra.non_persistent.VmExtra.qemu_vifs then begin
-                   match (List.assoc vif.Vif.id vm_t.VmExtra.non_persistent.VmExtra.qemu_vifs) with
-                   | _, Device device ->
-                     destroy device;
-                     let non_persistent = { vm_t.VmExtra.non_persistent with
-                                            VmExtra.qemu_vifs = List.remove_assoc vif.Vif.id vm_t.VmExtra.non_persistent.VmExtra.qemu_vifs } in
-                     DB.write vm { vm_t with VmExtra.non_persistent = non_persistent }
-                   | _, _ -> ()
-                 end;
-               ) vm_t
-           | Network.Sriov _ ->
-               debug "Ignoring unplug on network SR-IOV VF backed VIF = %s.\
-                 It would be unplugged until its PCI device is unplugged." (id_of vif);
+           begin
+             match vif.backend with
+             | Network.Local _ | Network.Remote _ ->
+               (* If the device is gone then this is ok *)
+               let destroy device =
+                 (* NB different from the VBD case to make the test pass for now *)
+                 Xenops_task.with_subtask task (Printf.sprintf "Vif.hard_shutdown %s" (id_of vif))
+                   (fun () -> (if force then Device.hard_shutdown else Device.clean_shutdown) task ~xs device);
+                 Xenops_task.with_subtask task (Printf.sprintf "Vif.release %s" (id_of vif))
+                   (fun () -> Device.Vif.release task ~xc ~xs device) in
+               destroy device;
+               Opt.iter (fun vm_t ->
+                   (* If we have a qemu frontend, detach this too. *)
+                   if List.mem_assoc vif.Vif.id vm_t.VmExtra.non_persistent.VmExtra.qemu_vifs then begin
+                     match (List.assoc vif.Vif.id vm_t.VmExtra.non_persistent.VmExtra.qemu_vifs) with
+                     | _, Device device ->
+                       destroy device;
+                       let non_persistent = { vm_t.VmExtra.non_persistent with
+                                              VmExtra.qemu_vifs = List.remove_assoc vif.Vif.id vm_t.VmExtra.non_persistent.VmExtra.qemu_vifs } in
+                       DB.write vm { vm_t with VmExtra.non_persistent = non_persistent }
+                     | _, _ -> ()
+                   end;
+                 ) vm_t
+             | Network.Sriov _ ->
+                 debug "Ignoring unplug on network SR-IOV VF backed VIF = %s.\
+                   It would be unplugged until its PCI device is unplugged." (id_of vif)
+           end;
            let domid = device.Device_common.frontend.Device_common.domid in
            let interfaces = interfaces_of_vif domid vif.id vif.position in
            List.iter (fun interface ->
@@ -2797,14 +2801,7 @@ module VIF = struct
             match vif.backend with
             | Network.Sriov pci ->
               let open Xenops_interface.Pci in
-              let pci' = {
-                id = "", "";
-                position = 0;
-                address = pci;
-                msitranslate = None;
-                power_mgmt = None;
-              } in
-              let pci_state = PCI.get_state vm pci' in
+              let pci_state = PCI.get_state' vm pci in
               let open Xenops_interface.Pci in
               begin match pci_state.plugged with
               | true ->
