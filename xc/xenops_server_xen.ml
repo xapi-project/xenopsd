@@ -1175,14 +1175,11 @@ module VM = struct
           video_mib=video_mib;
           extras = [];
         } in
-      let bridge_of_network = function
-        | Network.Local b -> Some b
-        | Network.Sriov _ -> None
-        | Network.Remote (_, b) -> Some b in
       let nics = List.filter_map (fun vif ->
-          match bridge_of_network vif.Vif.backend with
-          | Some b -> Some (vif.Vif.mac, b, vif.Vif.position)
-          | None -> None (* TODO: passthrough with QEMU *)
+          match vif.Vif.backend with
+          | Network.Local b | Network.Remote (_, b) ->
+            Some (vif.Vif.mac, b, vif.Vif.position)
+          | Network.Sriov _ -> None
         ) vifs in
       match ty with
       | PV { framebuffer = false } -> None

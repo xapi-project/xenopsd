@@ -792,14 +792,11 @@ module NetSriovVf = struct
 
   let add  ~xs ~devid ~mac ?mtu ?(rate=None) ?(backend_domid=0) ?(other_config=[]) 
       ~pci ~vlan ~carrier ?(extra_xenserver_keys=[]) (task: Xenops_task.task_handle) domid =
-    let dbg = Printf.sprintf "Task %s reference %s"
-      (Xenops_task.id_of_handle task) (Xenops_task.to_interface_task task).Task.dbg
-    in 
     let vlan_str = match vlan with None -> "none" | Some vlan -> sprintf "%Ld" vlan in
     let rate_str = match rate with None -> "none" | Some (a, b) -> sprintf "(%Ld,%Ld)" a b in
-    debug "%s: Device.NetSriovVf.add domid=%d devid=%d pci=%s vlan=%s mac=%s carrier=%b \
+    debug "Device.NetSriovVf.add domid=%d devid=%d pci=%s vlan=%s mac=%s carrier=%b \
            rate=%s other_config=[%s] extra_xenserver_keys=[%s]" 
-      dbg domid devid (Xenops_interface.Pci.string_of_address pci)  vlan_str mac carrier rate_str
+      domid devid (Xenops_interface.Pci.string_of_address pci)  vlan_str mac carrier rate_str
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) other_config))
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) extra_xenserver_keys));
 
@@ -821,19 +818,18 @@ module NetSriovVf = struct
     in
     begin
       let ret = Network_client.Client.Sriov.make_vf_config
-        (Printf.sprintf "%s: Sriov.make_vf_config" dbg)
-        ~pci_address:pci ~vf_info:net_sriov_vf_config
+        (Xenops_task.get_dbg task) ~pci_address:pci ~vf_info:net_sriov_vf_config
       in
       let open Network_interface in
       match ret with
       | Ok -> ()
       | Error Config_vf_rate_not_supported ->
-        debug "%s: It is not supported to configure rate on this network SR-IOV VF (pci:%s)"
-          dbg (Pci.string_of_address pci)
+        error "It is not supported to configure rate on this network SR-IOV VF (pci:%s)"
+          (Pci.string_of_address pci)
       | Error (Unknown s) ->
-        failwith (Printf.sprintf "%s: Failed to configure network SR-IOV VF \
+        failwith (Printf.sprintf "Failed to configure network SR-IOV VF \
             (pci:%s) with mac=%s vlan=%s rate=%s: %s"
-            dbg (Pci.string_of_address pci) mac vlan_str rate_str s)
+            (Pci.string_of_address pci) mac vlan_str rate_str s)
     end;
     device
 
