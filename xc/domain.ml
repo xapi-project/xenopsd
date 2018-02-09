@@ -257,6 +257,7 @@ let make ~xc ~xs vm_info uuid =
               "drivers";
               "control";
               "attr";
+              "xenserver/attr";
               "data";
               "messages";
               "vm-data";
