@@ -797,10 +797,7 @@ module NetSriovVf = struct
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) other_config))
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) extra_xenserver_keys));
 
-    let frontend = { domid = domid; kind = NetSriovVf; devid = devid } in
-    let backend = { domid = backend_domid; kind = NetSriovVf; devid = devid } in
-    let device = { backend = backend; frontend = frontend } in
-
+    let device = Device_common.make_nsv_device ~back_domid:backend_domid domid devid in
     add_device ~xs device (extra_xenserver_keys @ other_config);
     let rate_Mbps = match rate with
       | Some (0L, _) | None -> None

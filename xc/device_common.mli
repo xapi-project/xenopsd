@@ -73,6 +73,10 @@ val list_backends : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> device list
     directory.*)
 val list_frontends : xs:Xenstore.Xs.xsh -> ?for_devids:int list -> Xenctrl.domid -> device list
 
+val make_nsv_device : ?back_domid:int -> int -> int -> device
+
+val list_xenserver_devices: xs:Xenstore.Xs.xsh -> ?for_devids:int list -> Xenctrl.domid -> device list
+
 (** Return a list of devices connecting two domains. Ignore those whose kind 
     we don't recognise *)
 val list_devices_between : xs:Xenstore.Xs.xsh -> Xenctrl.domid -> Xenctrl.domid -> device list

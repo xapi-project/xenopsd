@@ -232,6 +232,14 @@ let readdir ~xs d = try xs.Xs.directory d with Xs_protocol.Enoent _ -> []
 let to_list ys = List.concat (List.map Opt.to_list ys)
 let list_kinds ~xs dir = to_list (List.map parse_kind (readdir ~xs dir))
 
+let filter_on_devids ~xs ?for_devids dir =
+  match for_devids with
+  | None -> List.filter_map parse_int (readdir ~xs dir)
+  | Some devids ->
+    devids |>
+    List.filter (fun devid->
+        try ignore(xs.Xs.read (sprintf "%s/%d" dir devid)); true with _->false)
+
 (* NB: we only read data from the frontend directory. Therefore this gives
    the "frontend's point of view", using data that we wrote into a subtree
    that is writable dom0 only (not by the frontend domain). *)
@@ -241,11 +249,7 @@ let list_frontends ~xs ?for_devids domid =
   List.concat (List.map
                  (fun k ->
                     let dir = sprintf "%s/%s" frontend_dir (string_of_kind k) in
-                    let devids = match for_devids with
-                      | None -> to_list (List.map parse_int (readdir ~xs dir))
-                      | Some devids ->(* check that any specified devids are present in frontend_dir *)
-                        List.filter (fun devid->try ignore(xs.Xs.read (sprintf "%s/%d" dir devid)); true with _->false) devids;
-                    in
+                    let devids = filter_on_devids ~xs ?for_devids dir in
                     to_list (List.map
                                (fun devid ->
                                   (* domain [domid] believes it has a frontend for
@@ -259,6 +263,25 @@ let list_frontends ~xs ?for_devids domid =
                                   with _ -> None
                                ) devids)
                  ) kinds)
+
+(* Network SR-IOV VF device *)
+let make_nsv_device ?(back_domid=0) front_domid devid =
+  let frontend = { domid = front_domid; kind = NetSriovVf; devid = devid } in
+  let backend = { domid = back_domid; kind = NetSriovVf; devid = devid } in
+  { backend = backend; frontend = frontend }
+
+let list_xenserver_devices ~xs ?for_devids domid =
+  let xenserver_dir = sprintf "/local/domain/%d/xenserver/device" domid in
+  let mk = function
+    | NetSriovVf ->
+      let dir = sprintf "%s/%s" xenserver_dir (string_of_kind NetSriovVf) in
+      let devids = filter_on_devids ~xs ?for_devids dir in
+      Some (List.map (make_nsv_device domid) devids)
+    | _ -> None
+  in
+  list_kinds ~xs xenserver_dir
+  |> List.filter_map mk
+  |> List.concat
 
 (* NB: we only read data from the backend directory. Therefore this gives
    the "backend's point of view". *)

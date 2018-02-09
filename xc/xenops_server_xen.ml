@@ -540,10 +540,15 @@ let device_by_id xc xs vm kind domain_selection id =
     raise (Does_not_exist("domain", vm))
   | Some frontend_domid ->
     let fetch_all_from_xenstore_f () = (* expensive *)
-      let devices = Device_common.list_frontends ~xs frontend_domid in
+      let devices = (Device_common.list_frontends ~xs frontend_domid)
+        @ (Device_common.list_xenserver_devices ~xs frontend_domid)
+      in
       let key = _device_id kind in
       let id_of_device device =
-        let path = Device_common.get_private_data_path_of_device device in
+        let path = match kind with
+          | Device_common.NetSriovVf -> Device_common.extra_xenserver_path_of_device ~xs device
+          | _ -> Device_common.get_private_data_path_of_device device
+        in
         try Some (xs.Xs.read (Printf.sprintf "%s/%s" path key))
         with _ -> None in
       let ids = List.map id_of_device devices in
@@ -551,7 +556,9 @@ let device_by_id xc xs vm kind domain_selection id =
     in
     let fetch_one_from_xenstore_f cached_device =
       let cached_frontend_devid = cached_device.Device_common.frontend.Device_common.devid in
-      let xenstored_device = Device_common.list_frontends ~xs ~for_devids:[cached_frontend_devid] frontend_domid in
+      let xenstored_device = (Device_common.list_frontends ~xs ~for_devids:[cached_frontend_devid] frontend_domid)
+        @ (Device_common.list_xenserver_devices ~xs ~for_devids:[cached_frontend_devid] frontend_domid)
+      in
       match xenstored_device with [] -> raise Not_found | x ::_ -> x
     in
     try DeviceCache.get device_cache fetch_all_from_xenstore_f fetch_one_from_xenstore_f frontend_domid id
@@ -2491,6 +2498,11 @@ module VIF = struct
       with_xs (fun xs -> xs.Xs.read (active_path vm vif)) = "1"
     with _ -> false
 
+  let device_kind_of vif =
+    match vif.backend with
+    | Network.Local _ | Network.Remote _ -> Device_common.Vif
+    | Network.Sriov _ -> Device_common.NetSriovVf
+
   let plug_exn task vm vif =
     let vm_t = DB.read_exn vm in
     (* If the vif isn't listed as "active" then we don't automatically plug this one in *)
@@ -2500,7 +2512,7 @@ module VIF = struct
         (fun xc xs frontend_domid hvm ->
            let backend_domid = backend_domid_of xc xs vif in
            (* Remember the VIF id with the device *)
-           let id = _device_id Device_common.Vif, id_of vif in
+           let id = _device_id (device_kind_of vif), id_of vif in
            let xenopsd_backend = [ "xenopsd-backend", "classic" ] in
            let static_ip_setting = xenstore_of_static_ip_setting vif in
            let interfaces = interfaces_of_vif frontend_domid vif.id vif.position in
@@ -2547,7 +2559,8 @@ module VIF = struct
                   let (_: Device_common.device) = 
                     (with_common_params Device.NetSriovVf.add)
                        ~pci ~vlan:vif.vlan ~carrier:vif.carrier
-                       ~extra_xenserver_keys:(static_ip_setting @ xenopsd_backend @ ["mac", mac])
+                       ~extra_xenserver_keys:(static_ip_setting @ xenopsd_backend
+                           @ [("mac", mac); id])
                        task frontend_domid
                   in
                   ()
@@ -2562,7 +2575,7 @@ module VIF = struct
       (fun xc xs ->
          try
            (* If the device is gone then this is ok *)
-           let device = device_by_id xc xs vm Device_common.Vif Oldest (id_of vif) in
+           let device = device_by_id xc xs vm (device_kind_of vif) Oldest (id_of vif) in
            begin
              match vif.backend with
              | Network.Local _ | Network.Remote _ ->
@@ -2608,7 +2621,7 @@ module VIF = struct
       (fun xc xs ->
          try
            (* If the device is gone then this is ok *)
-           let device = device_by_id xc xs vm Device_common.Vif Oldest (id_of vif) in
+           let device = device_by_id xc xs vm (device_kind_of vif) Oldest (id_of vif) in
            let bridge = match network with
              | Network.Local x -> x
              | Network.Sriov _ -> raise (Unimplemented("network SR-IOV"))
@@ -2641,7 +2654,7 @@ module VIF = struct
       (fun xc xs ->
         try
           (* If the device is gone then this is ok *)
-          let device = device_by_id xc xs vm Device_common.Vif Newest (id_of vif) in
+          let device = device_by_id xc xs vm (device_kind_of vif) Newest (id_of vif) in
           match vif.backend with
             | Network.Local _ | Network.Remote _ -> Device.Vif.set_carrier ~xs device carrier
             | Network.Sriov _ ->
@@ -2708,11 +2721,11 @@ module VIF = struct
           t.Xst.write ip_setting_gateway value
       )
 
+
   let set_ipv4_configuration task vm vif ipv4_configuration =
-    let open Device_common in
     with_xc_and_xs
       (fun xc xs ->
-         let device = device_by_id xc xs vm Vif Newest (id_of vif) in
+         let device = device_by_id xc xs vm (device_kind_of vif) Newest (id_of vif) in
          let xenstore_path =
            Printf.sprintf "%s/%s"
              (Device_common.extra_xenserver_path_of_device ~xs device)
@@ -2728,10 +2741,9 @@ module VIF = struct
       )
 
   let set_ipv6_configuration task vm vif ipv6_configuration =
-    let open Device_common in
     with_xc_and_xs
       (fun xc xs ->
-         let device = device_by_id xc xs vm Vif Newest (id_of vif) in
+         let device = device_by_id xc xs vm (device_kind_of vif) Newest (id_of vif) in
          let xenstore_path =
            Printf.sprintf "%s/%s"
              (Device_common.extra_xenserver_path_of_device ~xs device)
@@ -2792,7 +2804,7 @@ module VIF = struct
     with_xc_and_xs
       (fun xc xs -> 
          try
-            let (d: Device_common.device) = device_by_id xc xs vm Device_common.Vif Newest (id_of vif) in
+            let (d: Device_common.device) = device_by_id xc xs vm (device_kind_of vif) Newest (id_of vif) in
             let domid = d.Device_common.frontend.Device_common.domid in
             let device = "vif" ^ (string_of_int domid) ^ "." ^ (string_of_int vif.position) in
             match vif.backend with
@@ -2840,7 +2852,7 @@ module VIF = struct
         | Network.Sriov _ -> None
         | Network.Local _ | Network.Remote _ ->
           try
-            let (device: Device_common.device) = device_by_id xc xs vm Device_common.Vif Newest (id_of vif) in
+            let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of vif) Newest (id_of vif) in
             if Hotplug.device_is_online ~xs device
             then None
             else Some Needs_unplug
