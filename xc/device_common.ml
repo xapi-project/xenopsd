@@ -37,6 +37,7 @@ exception Device_unrecognized of string
 exception Hotplug_script_expecting_field of device * string
 exception Unknown_device_type of string
 exception Unknown_device_protocol of string
+exception QMP_Error of int * string
 
 module D = Debug.Make(struct let name = "xenops" end)
 open D
@@ -338,22 +339,42 @@ let is_upstream_qemu domid =
     with_xs (fun xs -> xs.Xs.read (sprintf "/libxl/%d/dm-version" domid)) = "qemu_xen"
   with _ -> false
 
-let qmp_write_and_read domid ?(read_result=true) cmd  =
-  try
-    let open Qmp in
-    debug "QMP.Command for domid %d: %s" domid (string_of_message cmd);
-    let c = Qmp_protocol.connect (qmp_libxl_path domid) in
-    finally
-      (fun () ->
-         Qmp_protocol.negotiate c;
-         Qmp_protocol.write c cmd;
-         if read_result then
-           Some (Qmp_protocol.read c)
-         else None
-      )
-      (fun () -> Qmp_protocol.close c)
-  with e ->
-    error "Caught exception attempting to write qmp message: %s" (Printexc.to_string e);
+let qmp domid cmd  =
+  let open Qmp in
+  let cmd' = string_of_message cmd in
+  debug "QMP.Command for domid %d: %s" domid cmd';
+  let c = Qmp_protocol.connect (qmp_libxl_path domid) in
+  finally
+    (fun () ->
+       Qmp_protocol.negotiate c;
+       Qmp_protocol.write c cmd;
+       Qmp_protocol.read c
+    )
+    (fun () -> Qmp_protocol.close c)
+
+let qmp_write_and_read domid cmd =
+  match qmp domid cmd with
+  | x -> Some x
+  | exception e ->
+    let cmd' = Qmp.string_of_message cmd in
+    error "%s: writing qmp `%s` to domain %d: %s"
+      __LOC__ cmd' domid (Printexc.to_string e);
     None
 
-let qmp_write domid cmd = qmp_write_and_read ~read_result:false domid cmd |> ignore
+let qmp_write domid cmd =
+  match qmp domid cmd with
+  | Qmp.(Success (_, Unit))         -> ()
+  | Qmp.(Error   (_, {cls; descr})) ->
+    let cmd' = Qmp.string_of_message cmd in
+    error "%s: qmp result for domid %d (%s) = {%s, %s}"
+      __LOC__ domid cmd' cls descr;
+    raise (QMP_Error(domid, String.concat " " [cls; descr]))
+  | _ ->
+    let cmd' = Qmp.string_of_message cmd in
+    error "%s: qmp result for domid %d (%s) contains data"
+      __LOC__ domid cmd';
+  | exception e ->
+    let cmd' = Qmp.string_of_message cmd in
+    error "%s: writing qmp message '%s' to domain %d: %s"
+      __LOC__ cmd' domid (Printexc.to_string e);
+      raise (QMP_Error(domid, Printexc.to_string e))
