@@ -107,5 +107,5 @@ val is_upstream_qemu: Xenctrl.domid -> bool
 val qmp_write_and_read: Xenctrl.domid -> Qmp.message -> Qmp.message option
 val qmp_write: Xenctrl.domid -> Qmp.message -> unit
 
-val qmp_cmd:      Xenctrl.domid -> Qmp.command -> Qmp.message
-val qmp_safe_cmd: Xenctrl.domid -> Qmp.command -> Qmp.result (** QMP_Error *)
+val qmp_send_cmd_unsafe: Xenctrl.domid -> Qmp.command -> Qmp.message
+val qmp_send_cmd:        Xenctrl.domid -> Qmp.command -> Qmp.result (** QMP_Error *)

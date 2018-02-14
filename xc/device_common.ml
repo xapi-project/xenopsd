@@ -384,12 +384,12 @@ let make_qmp_id () =
   incr qmp_id_count;
   Printf.sprintf "qmp-%06d" !qmp_id_count
 
-(** [qmp_cmd domid cmd] sends [cmd] to QEMU, waits for the *matching*
+(** [qmp_send_cmd_unsafe omid cmd] sends [cmd] to QEMU, waits for the *matching*
  * response, and returns the result. Commands are tagged with an
  * identifier and the function waits for the matching response,
  * skipping all other responses it receives while waiting.
  *)
-let qmp_cmd domid cmd =
+let qmp_send_cmd_unsafe domid cmd =
   let id   = make_qmp_id () in
   let msg  = Qmp.Command(Some id, cmd) in
   let msg' = Qmp.string_of_message msg in
@@ -432,11 +432,11 @@ let qmp_cmd domid cmd =
     )
     (fun () -> Qmp_protocol.close c)
 
-(* [qmp_safe_cmd domid cmd] sends [cmd] to [domid] and checks that the
+(* [qmp_cmd domid cmd] sends [cmd] to [domid] and checks that the
  * result it returns is Success. Otherwise it will raise [QMP_Error].
  *)
-let qmp_safe_cmd domid cmd =
-  match qmp_cmd domid cmd with
+let qmp_send_cmd domid cmd =
+  match qmp_send_cmd_unsafe domid cmd with
   | Qmp.(Success (_, result)) -> result
   | message ->
     let msg' = Qmp.string_of_message message in

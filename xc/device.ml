@@ -1415,11 +1415,8 @@ module Vusb = struct
   let vusb_controller_plug ~xs ~domid ~driver ~driver_id =
     let is_running = Qemu.is_running ~xs domid in
     match is_running with
-    | true  -> (
-        let open Qmp in
-        let qmp_cmd = Command (None, Device_add (driver, driver_id, None)) in
-        qmp_write domid qmp_cmd
-      )
+    | true  -> 
+      qmp_send_cmd domid Qmp.(Device_add (driver, driver_id, None)) |> ignore
     | _ ->()
 
   let vusb_plug ~xs ~domid ~id ~hostbus ~hostport ~version =
@@ -1443,10 +1440,12 @@ module Vusb = struct
     let is_running = Qemu.is_running ~xs domid in
     match is_running with
     | true  -> (
-        let open Qmp in
-        let driver = "usb-host" in
-        let qmp_cmd = Command (None, Device_add (driver, id, Some (get_bus version, hostbus, hostport))) in
-        qmp_write domid qmp_cmd
+        let cmd = Qmp.(Device_add 
+          ( "usb-host"
+          , id
+          , Some (get_bus version, hostbus, hostport)
+          )) 
+        in qmp_send_cmd domid cmd |> ignore
       )
     | _ ->()
 
@@ -1454,12 +1453,8 @@ module Vusb = struct
     debug "Vusb unplugged: vusb device unplugged";
     let is_running = Qemu.is_running ~xs domid in
     match is_running with
-    | true  -> (
-        let open Qmp in
-        let qmp_cmd = Command (None, Device_del (id)) in
-        qmp_write domid qmp_cmd
-      )
-    | _  ->()
+    | true  -> qmp_send_cmd domid Qmp.(Device_del id) |> ignore
+    | _     ->()
 
   let qom_list ~xs ~domid =
     (*. 1. The QEMU Object Model(qom) provides a framework for registering user
@@ -1475,19 +1470,16 @@ module Vusb = struct
     debug "qom list to check if usb device is attached to vm";
     let is_running = Qemu.is_running ~xs domid in
     match is_running with
-    | true  -> (
-        let open Qmp in
+    | true  -> 
         let path = "/machine/peripheral" in
-        let qmp_cmd = Command (None, Qom_list (path)) in
-        let parse_qmp_message = function
-          | Success (None, Qom usbs) -> List.map (fun p -> p.name) usbs
-          | _ -> debug "Get unexpected result after sending Qmp message: %s" (string_of_message qmp_cmd); []
-        in
-        let qmp_cmd_result = qmp_write_and_read domid qmp_cmd in
-        match qmp_cmd_result with
-        | Some qmp_message -> debug "qom_list message result %s" (string_of_message qmp_message);
-          parse_qmp_message qmp_message
-        | None -> debug "Fail to get result after sending Qmp message: %s" (string_of_message qmp_cmd); [])
+        qmp_send_cmd domid Qmp.(Qom_list (path)) 
+        |> ( function 
+           | Qmp.(Qom usbs) -> List.map (fun p -> p.Qmp.name) usbs
+           | other -> 
+               debug "%s unexpected qmp result for domid %d Qom_list"
+               __LOC__ domid;
+               []
+           )
     | _  -> []
 
 end
@@ -1991,11 +1983,10 @@ module Backend = struct
     module Vbd = struct
       let qemu_media_change ~xs device _type params =
         Vbd_Common.qemu_media_change ~xs device _type params;
-        let open Qmp in
         let cd = "ide1-cd1" in
+        let open Qmp in
         if params = "" then
-          let qmp_cmd = Command(None, Eject (cd, Some true)) in
-          qmp_write device.frontend.domid qmp_cmd
+          qmp_send_cmd device.frontend.domid Qmp.(Eject(cd, Some true)) |> ignore
         else
           try
             let c = Qmp_protocol.connect (qmp_libxl_path device.frontend.domid) in
@@ -2170,32 +2161,38 @@ module Backend = struct
         )
 
       let suspend (task: Xenops_task.task_handle) ~xs ~qemu_domid domid =
-        let open Qmp in
+        let as_msg cmd = Qmp.(Success(Some __LOC__, cmd)) in
+        let save_file = sprintf qemu_save_path domid in
+        (* send fd of save file  - this is outside the Qmp protocol *)
         let c = Qmp_protocol.connect (qmp_libxl_path domid) in
         finally
           (fun () ->
-             let fd_of_c = Qmp_protocol.to_fd c in
-             let save_file = sprintf qemu_save_path domid in
-             let fd_of_save_file = Unix.openfile save_file [ Unix.O_WRONLY; Unix.O_CREAT ] 0o660 in
-             finally
-               (fun () -> ignore(Fd_send_recv.send_fd fd_of_c " " 0 1 [] fd_of_save_file))
-               (fun () -> Unix.close fd_of_save_file);
+            let perms   = [ Unix.O_WRONLY; Unix.O_CREAT ] in
+            let fd_of_c = Qmp_protocol.to_fd c in
+            let fd_of_save_file = Unix.openfile save_file perms 0o660 in
+            finally
+              (fun () -> 
+                ignore(Fd_send_recv.send_fd fd_of_c " " 0 1 [] fd_of_save_file))
+              (fun () -> Unix.close fd_of_save_file);)
+          (fun () -> Qmp_protocol.close c);
 
-             let qmp_cmd = Command (None, Add_fd None) in
-             Qmp_protocol.negotiate c;
-             Qmp_protocol.write c qmp_cmd;
-             let fd_info = match Qmp_protocol.read c with
-               | Success (None, Fd_info x) -> x
-               | _ -> raise (Internal_error (sprintf "Get unexpected result after sending Qmp message: %s" (string_of_message qmp_cmd)))
-             in
-             finally
-               (fun () ->
-                  let path = sprintf "/dev/fdset/%d" fd_info.fdset_id in
-                  Qmp_protocol.write c (Command (None, Stop));
-                  Qmp_protocol.write c (Command (None, Xen_save_devices_state path)))
-               (fun () ->
-                  Qmp_protocol.write c (Command (None, Remove_fd fd_info.fdset_id))))
-          (fun () -> Qmp_protocol.close c)
+        (* send Stop, Save, Remove fd *)
+        let fd = qmp_send_cmd domid Qmp.(Add_fd None) 
+          |> function
+          | Qmp.(Fd_info fd) -> fd
+          | other -> 
+              raise (Internal_error (sprintf 
+                "Get unexpected result after sending Qmp message: %s" 
+                Qmp.(other |> as_msg |> string_of_message)))
+        in
+        finally
+         (fun () ->
+            let path = sprintf "/dev/fdset/%d" fd.Qmp.fdset_id in
+            qmp_send_cmd domid Qmp.Stop |> ignore;
+            qmp_send_cmd domid Qmp.(Xen_save_devices_state path) |> ignore)
+         (fun () ->
+            qmp_send_cmd domid Qmp.(Remove_fd fd.fdset_id) |> ignore)
+
 
       (* Wait for QEMU's event socket to appear. *)
       let wait_event_socket ~task ~name ~domid ~timeout =
