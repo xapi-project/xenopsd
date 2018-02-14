@@ -378,3 +378,74 @@ let qmp_write domid cmd =
     error "%s: writing qmp message '%s' to domain %d: %s"
       __LOC__ cmd' domid (Printexc.to_string e);
       raise (QMP_Error(domid, Printexc.to_string e))
+
+let qmp_id_count = ref 0
+let make_qmp_id () =
+  incr qmp_id_count;
+  Printf.sprintf "qmp-%06d" !qmp_id_count
+
+(** [qmp_cmd domid cmd] sends [cmd] to QEMU, waits for the *matching*
+ * response, and returns the result. Commands are tagged with an
+ * identifier and the function waits for the matching response,
+ * skipping all other responses it receives while waiting.
+ *)
+let qmp_cmd domid cmd =
+  let id   = make_qmp_id () in
+  let msg  = Qmp.Command(Some id, cmd) in
+  let msg' = Qmp.string_of_message msg in
+  debug "QMP.Command for domid %d: %s" domid msg';
+  let c = Qmp_protocol.connect (qmp_libxl_path domid) in
+  let rec wait_for_result id =
+    match Qmp_protocol.read c with
+    (* no ID *)
+    | Qmp.Greeting(_) 
+    | Qmp.Command(_, _) 
+    | Qmp.Error(None, _) 
+    | Qmp.Success(None, _)
+    | Qmp.Event(_) as resp ->
+        let resp' = Qmp.string_of_message resp in
+        info "%s: skipping unexpected qmp response from domid %d: %s" 
+          __LOC__ domid resp';
+        wait_for_result id
+
+    (* wrong ID *)
+    | Qmp.Success(Some id',_) as resp when id <> id' ->
+        let resp' = Qmp.string_of_message resp in
+        info "%s: skipping unexpected qmp response from domid %d: %s" 
+          __LOC__ domid resp';
+        wait_for_result id
+    | Qmp.Error(Some id',_) as resp when id <> id' ->
+        let resp' = Qmp.string_of_message resp in
+        info "%s: skipping unexpected qmp response from domid %d: %s" 
+          __LOC__ domid resp';
+        wait_for_result id
+    
+    (* correct ID *)
+    | Qmp.Success(Some _, _) as message -> message
+    | Qmp.Error(Some _,_)    as message -> message
+  in
+  finally
+    (fun () ->
+       Qmp_protocol.negotiate c;
+       Qmp_protocol.write c msg;
+       wait_for_result id 
+    )
+    (fun () -> Qmp_protocol.close c)
+
+(* [qmp_safe_cmd domid cmd] sends [cmd] to [domid] and checks that the
+ * result it returns is Success. Otherwise it will raise [QMP_Error].
+ *)
+let qmp_safe_cmd domid cmd =
+  match qmp_cmd domid cmd with
+  | Qmp.(Success (_, result)) -> result
+  | message ->
+    let msg' = Qmp.string_of_message message in
+    error "%s: qmp result for domid %d: %s" __LOC__ domid msg';
+    raise (QMP_Error(domid, msg'))
+  | exception e ->
+    let cmd' = Qmp.(string_of_message (Command(None,cmd))) in
+    error "%s: writing qmp message '%s' to domain %d: %s"
+      __LOC__ cmd' domid (Printexc.to_string e);
+    raise (QMP_Error(domid, Printexc.to_string e))
+  
+
