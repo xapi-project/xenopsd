@@ -1409,10 +1409,14 @@ module Vkbd = struct
 end
 
 module Vusb = struct
+  let exec_usb_reset_script argv =
+    let stdout, stderr = Forkhelpers.execute_command_get_output !Xc_resources.usb_reset_script argv in
+    debug "usb_reset_script %s returned stdout=%s stderr=%s" (String.concat " " argv) stdout stderr
+
   let cleanup domid =
     try
-      let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script ["cleanup"; "-d"; string_of_int domid] in
-      debug "Got %s %s" stdout stderr
+      let cmd = ["cleanup"; "-d"; string_of_int domid] in
+      exec_usb_reset_script cmd
     with _ ->
       warn "Failed to clean up VM %s" (string_of_int domid)
 
@@ -1420,15 +1424,15 @@ module Vusb = struct
     try
       match action, priv with
       | "attach", false ->
-        let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script [ "attach"; hostbus ^ "-" ^ hostport; "-d"; string_of_int domid; "-p"; string_of_int pid] in
-        debug "Got %s %s" stdout stderr
+        let cmd = [ "attach"; hostbus ^ "-" ^ hostport; "-d"; string_of_int domid; "-p"; string_of_int pid] in
+        exec_usb_reset_script cmd
       | "attach", true ->
         (*When qemu is privileged, attach will only reset device.*)
-        let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script [ "attach"; hostbus ^ "-" ^ hostport; "-d"; string_of_int domid; "-p"; string_of_int pid; "-r"] in
-        debug "Got %s %s" stdout stderr
+        let cmd = [ "attach"; hostbus ^ "-" ^ hostport; "-d"; string_of_int domid; "-p"; string_of_int pid; "-r"] in
+        exec_usb_reset_script cmd
       | "detach", false ->
-        let stdout, stderr = Forkhelpers.execute_command_get_output Device_common.usb_reset_script [ "detach"; hostbus ^ "-" ^ hostport ; "-d"; string_of_int domid; "-i"; "0" ; "0"; ] in
-        debug "Got %s %s" stdout stderr
+        let cmd = [ "detach"; hostbus ^ "-" ^ hostport ; "-d"; string_of_int domid; "-i"; "0" ; "0"; ] in
+        exec_usb_reset_script cmd
       | "detach", true -> () (*When qemu is privileged, detach will do nothing.*)
       | _, _ -> () (*Invalid operation, will do nothing*)
     with _ ->
@@ -1464,7 +1468,7 @@ module Vusb = struct
         *)
         begin match Qemu.pid ~xs domid with
           | Some pid -> call_usb_reset hostbus hostport domid pid "attach" priv
-          | _ -> failwith "qemu pid does not exist"
+          | _ -> failwith (Printf.sprintf "qemu pid does not exist for vm %s" (string_of_int domid))
         end;
         let cmd = Qmp.(Device_add
                          ( "usb-host"
@@ -1483,7 +1487,7 @@ module Vusb = struct
         (*Call vusb cleanup in usb_reset.py*)
         match Qemu.pid ~xs domid with
         | Some pid -> call_usb_reset hostbus hostport domid pid "detach" priv
-        | _ -> failwith "qemu pid does not exist"
+        | _ -> failwith (Printf.sprintf "qemu pid does not exist for vm %s" (string_of_int domid))
       end
 
   let qom_list ~xs ~domid =
