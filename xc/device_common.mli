@@ -103,7 +103,6 @@ val device_model_path: qemu_domid:int -> int -> string
 val xenops_domain_path: string
 val xenops_path_of_domain: Xenctrl.domid -> string
 val xenops_vgpu_path: Xenctrl.domid -> devid -> string
-val usb_reset_script: string
 val is_upstream_qemu: Xenctrl.domid -> bool
 val qmp_send_cmd
   : ?send_fd:Unix.file_descr (* send this fd ahead of command *)
