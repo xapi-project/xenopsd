@@ -1479,7 +1479,8 @@ module Vusb = struct
       []
 
   let vusb_controller_plug ~xs ~domid ~driver ~driver_id =
-    if Qemu.is_running ~xs domid then
+    if (Qemu.is_running ~xs domid)
+    && not (List.mem driver_id (qom_list ~xs ~domid))then
       qmp_send_cmd domid Qmp.(Device_add Device.({driver; device=USB { USB.id=driver_id; params=None }})) |> ignore
 
   let vusb_plug ~xs ~privileged ~domid ~id ~hostbus ~hostport ~version =
