@@ -28,6 +28,7 @@ depends: [
   "xapi-idl"
   "xapi-inventory"
   "xapi-stdext-unix"
+  "xapi-work-queues"
   "xenctrl"
   "xenstore"
   "xenstore_transport"

@@ -1,0 +1,31 @@
+opam-version: "1.2"
+name: "xapi-work-queues"
+version: "0.1.0"
+maintainer: "\"xen-api@lists.xen.org\""
+authors: [ "\"xen-api@lists.xen.org\"" ]
+license: "LGPL-2.1 with OCaml linking exception"
+homepage: "https://github.com/xapi-project/xapi-work-queues"
+dev-repo: "https://github.com/xapi-project/xapi-work-queues.git"
+bug-reports: "https://github.com/xapi-project/xapi-work-queues/issues"
+build: [
+  ["ocaml" "setup.ml" "-configure" "--prefix" prefix]
+  ["ocaml" "setup.ml" "-build"]
+]
+install: ["ocaml" "setup.ml" "-install"]
+remove: [
+  ["ocamlfind" "remove" "xapi_work_queues"]
+]
+build-test: [
+  ["ocaml" "setup.ml" "-configure" "--enable-tests"]
+  ["ocaml" "setup.ml" "-build"]
+  ["ocaml" "setup.ml" "-test"]
+]
+depends: [
+  "base-threads"
+  "ocamlbuild" {build}
+  "ocamlfind" {build}
+  "ounit" { >= "2.0.0"}
+  "xapi-idl"
+  "xapi-stdext"
+]
+available: [ ocaml-version >= "4.02.3" ]
