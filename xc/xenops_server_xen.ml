@@ -2975,31 +2975,30 @@ module Actions = struct
 
   let maybe_update_pv_drivers_detected ~xc ~xs domid path =
     let vm = get_uuid ~xc domid |> Uuidm.to_string in
-    let updated =
-      DB.update vm (
-        Opt.map
-          (function { VmExtra.persistent; non_persistent } as vmextra ->
-            if not non_persistent.VmExtra.pv_drivers_detected then begin
-              (* If the new value for this device is 4 then PV drivers are present *)
-              try
-                let value = xs.Xs.read path in
-                if value = "4" (* connected *) then begin
-                  let non_persistent = { non_persistent with VmExtra.pv_drivers_detected = true } in
-                  debug "VM = %s; found PV driver evidence on %s (value = %s)" vm path value;
-                  { VmExtra.persistent; non_persistent }
-                end else
-                  vmextra
-              with Xs_protocol.Enoent _ ->
-                warn "Watch event on %s fired but couldn't read from it" path;
-                (* the path must have disappeared immediately after the watch fired. Let's treat this as if we never saw it. *)
-                vmextra
-            end else
-              vmextra
-          )
-        )
-    in
-    if updated then
-      Updates.add (Dynamic.Vm vm) internal_updates
+    Opt.iter
+      (function { VmExtra.non_persistent } ->
+        if not non_persistent.VmExtra.pv_drivers_detected then begin
+          (* If the new value for this device is 4 then PV drivers are present *)
+          try
+            let value = xs.Xs.read path in
+            if value = "4" (* connected *) then begin
+              let updated =
+                DB.update vm (
+                  Opt.map (function { VmExtra.persistent; non_persistent } ->
+                    let non_persistent = { non_persistent with VmExtra.pv_drivers_detected = true } in
+                    debug "VM = %s; found PV driver evidence on %s (value = %s)" vm path value;
+                    { VmExtra.persistent; non_persistent }
+                  )
+                )
+              in
+              if updated then
+                Updates.add (Dynamic.Vm vm) internal_updates
+            end
+          with Xs_protocol.Enoent _ ->
+            warn "Watch event on %s fired but couldn't read from it" path;
+            () (* the path must have disappeared immediately after the watch fired. Let's treat this as if we never saw it. *)
+        end
+      ) (DB.read vm)
 
   let interesting_paths_for_domain domid uuid =
     let open Printf in [
