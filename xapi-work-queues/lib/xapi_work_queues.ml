@@ -1,5 +1,4 @@
-open Stdext.Threadext
-open Stdext
+open Xapi_stdext_threads.Threadext
 module D = Debug.Make(struct let name = "xapi_work_queues" end)
 open D
 

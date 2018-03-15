@@ -35,9 +35,9 @@ let () = Printf.ksprintf Jbuild_plugin.V1.send {|
   %s
   (libraries (
     oUnit
-    stdext
     threads
     threads.posix
+    xapi-stdext-threads
     xcp
   ))
 ))

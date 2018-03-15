@@ -1,5 +1,5 @@
 open OUnit2
-open Stdext.Threadext
+open Xapi_stdext_threads.Threadext
 
 module Item = struct
   type handle = {
