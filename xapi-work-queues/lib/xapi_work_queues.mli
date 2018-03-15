@@ -94,4 +94,4 @@ end
 
 module Make : functor (I : Item) -> S with type item = I.t
 
-val tests :  OUnit2.test list
+val tests : unit Alcotest.test list

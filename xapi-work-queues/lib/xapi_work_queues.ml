@@ -381,18 +381,16 @@ module Make(I:Item) = struct
 end
 
 module Test = struct
-  open OUnit2
-  let assert_tags ~msg ~expected actual =
-    assert_equal ~msg ~printer:(String.concat ",") expected actual
+  let tags = Alcotest.(list string)
 
-  let test_empty_queues _ =
+  let test_empty_queues () =
     let qs = Queues.create () in
     let dst = Queues.create () in
-    assert_tags ~msg:"Newly created queue is empty" ~expected:[] (Queues.tags qs);
+    Alcotest.check tags "Newly created queue is empty" [] (Queues.tags qs);
     Queues.transfer_tag "foo" qs dst;
-    assert_tags ~msg:"Queue still empty after noop transfer" ~expected:[] (Queues.tags qs);
-    assert_tags ~msg:"Destination is empty after noop transfer" ~expected:[] (Queues.tags dst);
-    assert_bool "Queue for non-existent tag is empty" (Queues.get "foo" qs |> Queue.is_empty)
+    Alcotest.check tags "Queue still empty after noop transfer" [] (Queues.tags qs);
+    Alcotest.check tags "Destination is empty after noop transfer" [] (Queues.tags dst);
+    Alcotest.check Alcotest.bool "Queue for non-existent tag is empty" true (Queues.get "foo" qs |> Queue.is_empty)
 
   let always _ _ = true
 
@@ -429,20 +427,18 @@ module Test = struct
       ) in
     f ();
     Thread.join thr;
-    assert_bool "pop test finished" !finished;
+    Alcotest.check Alcotest.bool "pop test finished" true !finished;
     (* When a per-tag queue becomes empty it must not show up anymore *)
-    assert_tags ~msg:"Per-tag queues are cleaned up" ~expected:[] (Queues.tags qs);
+    Alcotest.check tags "Per-tag queues are cleaned up" [] (Queues.tags qs);
     List.rev !popped
 
-  let items_printer lst =
-    List.map (fun (t,i) -> Printf.sprintf "%s,%d" t i) lst |>
-    String.concat "; "
+  let items = Alcotest.(pair string int |> list)
 
   (* expects only item, pops it and checks it *)
   let with_one_pop_thread (mytag, myitem) qs f =
     let popped = with_pop_thread 1 qs f in
-    assert_bool "queue is empty after pop" (Queues.get mytag qs |> Queue.is_empty);
-    assert_equal ~printer:items_printer [(mytag, myitem)] popped
+    Alcotest.check Alcotest.bool "queue is empty after pop" true (Queues.get mytag qs |> Queue.is_empty);
+    Alcotest.check items "popped items match" [(mytag, myitem)] popped
 
   (* checks that the pop schedule is round-robin.
      we don't do an exact comparison because even if the point where the RR schedule
@@ -450,12 +446,11 @@ module Test = struct
      be a valid schedule if we always pick the oldest queued item from each tag in turn.
   *)
   let check_schedule input schedule =
-    assert_equal ~msg:"all elements got scheduled"
-      ~printer:items_printer
+    Alcotest.check items "all elements got scheduled"
       (List.fast_sort compare input)
       (List.fast_sort compare schedule);
 
-    let schedule_str = items_printer schedule in
+    let schedule_str = let module M = (val items) in Fmt.to_to_string M.pp schedule in
     let schedule_err = "schedule is not RR: " ^ schedule_str in
     List.fold_left (fun (last_i) (t, i) ->
         (* we pick the 1st item from all tags,
@@ -463,7 +458,7 @@ module Test = struct
            So once we started picking the 3rd item we must not see the
            1st or 2nd items get scheduled.
         *)
-        assert_bool schedule_err (i >= last_i);
+        Alcotest.check Alcotest.bool schedule_err true (i >= last_i);
         i
       ) (-1) schedule |> ignore
 
@@ -487,7 +482,7 @@ module Test = struct
           ) |> Array.to_list |> List.flatten in
       if n == 3 then
         let vm1 = "vm1" and vm2 = "vm2" and vm3 = "vm3" in
-        assert_equal ~printer:items_printer
+        Alcotest.check items "vm tags match"
           [vm1, 1; vm1, 2; vm1, 3; vm2, 1; vm2, 2; vm3, 1]
           input;
         List.iter (fun (t,i) ->
@@ -497,18 +492,14 @@ module Test = struct
         let actual_tags = Queues.tags qs |> List.fast_sort compare in
         let expected_tags = Array.init n tag_of
                             |> Array.to_list |> List.fast_sort compare in
-        assert_equal ~printer:(String.concat ",")
-          ~msg:"tags"
+        Alcotest.check tags "tags match"
           expected_tags
           actual_tags;
 
         for i = 0 to n-1 do
           let tag = tag_of i in
           let q = Queues.get tag qs in
-          assert_equal
-            ~msg:"per-tag queue"
-            ~printer:(fun lst ->
-                List.map string_of_int lst |> String.concat ",")
+          Alcotest.check Alcotest.(list int) "per-tag queue"
             (Array.init (n-i) (fun x -> x+1) |> Array.to_list)
             (Queue.fold (fun acc e -> e :: acc) [] q |> List.rev)
         done;
@@ -517,42 +508,42 @@ module Test = struct
         if n == 3 then
           (* pick 1st item from each VM, then pick 2nd item from each, then 3rd *)
           let expected = [vm1, 1; vm2, 1; vm3, 1; vm1, 2; vm2, 2; vm1, 3] in
-          assert_equal ~printer:items_printer expected popped;
+          Alcotest.check items "per-vm items match" expected popped;
           check_schedule input popped
     in
 
     [
-      "pop, push" >:: with_thread (fun qs () ->
+      "pop, push", `Quick, with_thread (fun qs () ->
           Queues.push_with_coalesce None mytag myitem qs;
         );
 
-      "push, pop" >:: (fun _ ->
+      "push, pop", `Quick, (fun _ ->
           let qs = Queues.create () in
           Queues.push_with_coalesce None mytag myitem qs;
-          assert_tags ~msg:"exactly 1 tag after push" ~expected:[mytag] (Queues.tags qs);
+          Alcotest.check tags "exactly 1 tag after push" [mytag] (Queues.tags qs);
           with_one_pop_thread (mytag, myitem) qs ignore);
 
-      "push, transfer, pop" >:: (fun _ ->
+      "push, transfer, pop", `Quick, (fun _ ->
           let qs' = Queues.create () in
           with_thread (fun qs () ->
               Queues.push_with_coalesce None mytag myitem qs';
-              assert_tags ~msg:"Exactly 1 tag present" ~expected:[mytag] (Queues.tags qs');
+              Alcotest.check tags "Exactly 1 tag present" [mytag] (Queues.tags qs');
 
               Queues.transfer_tag mytag qs' qs;
-              assert_tags ~msg:"Tag removed after transfer" ~expected:[] (Queues.tags qs');
+              Alcotest.check tags "Tag removed after transfer" [] (Queues.tags qs');
               (* Do not check destination here because we have an active pop thread:
                  the test wouldn't be deterministic *)
             ) ()
         );
 
-      "RR 3" >:: test_rr 3;
+      "RR 3", `Quick, test_rr 3;
 
-      "RR 100" >:: test_rr 100
+      "RR 100", `Quick, test_rr 100
     ]
 
-  let tests = [
-    "empty queues" >:: test_empty_queues;
-    "queue" >::: test_ops
+  let tests : unit Alcotest.test list = [
+    "empty queues", [ "empty queues", `Quick, test_empty_queues ];
+    "ops", test_ops
   ]
 end
 let tests = Test.tests

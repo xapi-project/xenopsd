@@ -29,7 +29,9 @@ let () = Printf.ksprintf Jbuild_plugin.V1.send {|
 
 (executable (
   (name main)
-  (libraries (oUnit xapi-work-queues))
+  (libraries (alcotest
+              xapi-stdext-pervasives
+              xapi-work-queues))
   (flags (:standard -w -39 %s))
   %s
 ))

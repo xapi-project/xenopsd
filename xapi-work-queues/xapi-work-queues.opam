@@ -7,25 +7,14 @@ license: "LGPL-2.1 with OCaml linking exception"
 homepage: "https://github.com/xapi-project/xapi-work-queues"
 dev-repo: "https://github.com/xapi-project/xapi-work-queues.git"
 bug-reports: "https://github.com/xapi-project/xapi-work-queues/issues"
-build: [
-  ["ocaml" "setup.ml" "-configure" "--prefix" prefix]
-  ["ocaml" "setup.ml" "-build"]
-]
-install: ["ocaml" "setup.ml" "-install"]
-remove: [
-  ["ocamlfind" "remove" "xapi_work_queues"]
-]
-build-test: [
-  ["ocaml" "setup.ml" "-configure" "--enable-tests"]
-  ["ocaml" "setup.ml" "-build"]
-  ["ocaml" "setup.ml" "-test"]
-]
+build: [[ "jbuilder" "build" "-p" name ]]
+build-test: ["jbuilder" "runtest" "-p" name]
 depends: [
   "base-threads"
-  "ocamlbuild" {build}
-  "ocamlfind" {build}
-  "ounit" { >= "2.0.0"}
+  "jbuilder" {build & >= "1.0+beta11"}
+  "alcotest"
   "xapi-idl"
-  "xapi-stdext"
+  "xapi-stdext-pervasives"
+  "xapi-stdext-threads"
 ]
 available: [ ocaml-version >= "4.02.3" ]
