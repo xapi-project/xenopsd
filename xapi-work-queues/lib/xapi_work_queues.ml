@@ -12,7 +12,7 @@ module Queues = struct
 
   type 'a t = {
     mutable qs: 'a Queue.t StringMap.t;
-    mutable last_tag: string; (* used for round-robin scheduling *)
+    mutable last_tag: tag; (* used for round-robin scheduling *)
     m: Mutex.t;
     c: Condition.t;
   }
@@ -106,13 +106,6 @@ module type Item = sig
   val describe : t -> Rpc.t
   val diagnostics : t -> Rpc.t
   val execute : t -> unit
-end
-
-module type Dump = sig
-  type t
-  val t_of_rpc : Rpc.t -> t
-  val rpc_of_t : t -> Rpc.t
-  val make : unit -> t
 end
 
 module type S = sig
@@ -329,7 +322,7 @@ module Make(I:Item) = struct
          List.map (fun w -> Worker.is_active w) t.pool |> List.filter (fun x -> x) |> List.length
       )
 
-  let find_one queues f = List.fold_left (fun acc x -> acc || (f x)) false
+  let find_one _queues f = List.fold_left (fun acc x -> acc || (f x)) false
 
   (* Clean up any shutdown threads and remove them from the master list *)
   let gc pool =
@@ -364,10 +357,10 @@ module Make(I:Item) = struct
   let set_size t size =
     let active = count_active t in
     debug "XXX active = %d" active;
-    for i = 1 to max 0 (size - active) do
+    for _ = 1 to max 0 (size - active) do
       incr t
     done;
-    for i = 1 to max 0 (active - size) do
+    for _ = 1 to max 0 (active - size) do
       decr t
     done
 
@@ -419,7 +412,7 @@ module Test = struct
     let finished = ref false in
     let popped = ref [] in
     let thr = make_thread (fun () ->
-        for i = 1 to n do
+        for _ = 1 to n do
           let tag, item = Queues.pop qs in
           popped := (tag, item) :: !popped
         done;
@@ -452,7 +445,7 @@ module Test = struct
 
     let schedule_str = let module M = (val items) in Fmt.to_to_string M.pp schedule in
     let schedule_err = "schedule is not RR: " ^ schedule_str in
-    List.fold_left (fun (last_i) (t, i) ->
+    List.fold_left (fun (last_i) (_, i) ->
         (* we pick the 1st item from all tags,
            then the 2nd item from all tags, and so on.
            So once we started picking the 3rd item we must not see the

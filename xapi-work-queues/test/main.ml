@@ -135,7 +135,7 @@ let test_pool ?(errors=0) ~workers ~vms ~events () =
   (* queue but do not execute jobs, have them locked on the mutex *)
   Mutex.execute mutexes.(0) (fun () ->
       Mutex.execute mutexes.(1) (fun () ->
-          Array.iteri (fun i h ->
+          Array.iter (fun h ->
               Mutex.execute running.m (fun () -> running.count <- running.count + 1);
               push default h.tag (h.id, h)) handles
         );
@@ -150,7 +150,7 @@ let test_pool ?(errors=0) ~workers ~vms ~events () =
   let count_expect msg p =
     let actual = Array.to_list jobs_and_handles |> List.filter p |> List.length in
     let expected = Array.length jobs_and_handles in
-    Alcotest.check Alcotest.int "count" expected actual
+    Alcotest.check Alcotest.int msg expected actual
   in
 
   count_expect "should be called" (fun (job, _) -> job.called);
@@ -163,7 +163,7 @@ let items_printer lst =
 module IntMap = Map.Make(struct type t = int let compare = compare end)
 module IntSet = Set.Make(struct type t = int let compare = compare end)
 
-let check_schedule ctx schedule n ~workers =
+let check_schedule schedule n ~workers =
   Alcotest.check Alcotest.int "all events scheduled" n (List.length schedule);
   if workers = 1 then
     (* can only check the exact schedule for 1 worker for now,
@@ -203,14 +203,13 @@ let check_schedule ctx schedule n ~workers =
 
 
 
-let test_rr ~workers ~events ~vms ~flood ctx =
+let test_rr ~workers ~events ~vms ~flood () =
   let module Item = struct
     type t = string * (unit -> unit) * (unit -> unit)
     let describe (op, _, _) = Rpc.rpc_of_string op
     let diagnostics _ = Rpc.rpc_of_unit ()
 
     let execute (_, f, _) = f ()
-    let finally (_, _, g) = g ()
   end in
   let module XWQ = Xapi_work_queues.Make(Item) in
   let open XWQ in
@@ -306,7 +305,7 @@ let test_rr ~workers ~events ~vms ~flood ctx =
   set_size default 0;
   Printf.printf "Checking schedule for %d\n" events;
 
-  check_schedule ctx (List.rev !schedule) events ~workers
+  check_schedule (List.rev !schedule) events ~workers
 
 
 let suite =

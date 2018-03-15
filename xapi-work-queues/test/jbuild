@@ -32,7 +32,7 @@ let () = Printf.ksprintf Jbuild_plugin.V1.send {|
   (libraries (alcotest
               xapi-stdext-pervasives
               xapi-work-queues))
-  (flags (:standard -w -39 %s))
+  (flags (:standard -w -32-39 %s))
   %s
 ))
 

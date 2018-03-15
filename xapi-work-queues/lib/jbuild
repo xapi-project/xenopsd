@@ -31,7 +31,7 @@ let () = Printf.ksprintf Jbuild_plugin.V1.send {|
   (name xapi_work_queues)
   (public_name xapi-work-queues)
   (wrapped false)
-  (flags (:standard -warn-error +a-3 %s))
+  (flags (:standard -warn-error +a-3-32-34-39 %s))
   %s
   (libraries (
     alcotest
