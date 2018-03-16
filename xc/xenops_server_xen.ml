@@ -2958,6 +2958,8 @@ end
 module IntMap = Map.Make(struct type t = int let compare = compare end)
 
 module Actions = struct
+  let watch_m = Mutex.create ()
+
   (* CA-76600: the rtc/timeoffset needs to be maintained over a migrate. *)
   let store_rtc_timeoffset vm timeoffset =
     let _ = DB.update vm (
@@ -3044,14 +3046,16 @@ module Actions = struct
   let device_watches = ref IntMap.empty
 
   let domain_appeared xc xs domid =
-    device_watches := IntMap.add domid [] !device_watches
+    Mutex.execute watch_m (fun () ->
+      device_watches := IntMap.add domid [] !device_watches)
 
   let domain_disappeared xc xs domid =
     let token = watch_token domid in
     List.iter (fun d ->
         List.iter (Xenstore_watch.unwatch ~xs token) (watches_of_device d)
       ) (try IntMap.find domid !device_watches with Not_found -> []);
-    device_watches := IntMap.remove domid !device_watches;
+    Mutex.execute watch_m (fun () ->
+      device_watches := IntMap.remove domid !device_watches);
 
     (* Anyone blocked on a domain/device operation which won't happen because the domain
        		   just shutdown should be cancelled here. *)
@@ -3081,7 +3085,8 @@ module Actions = struct
     let domid = device.frontend.domid in
     let token = watch_token domid in
     List.iter (Xenstore_watch.watch ~xs token) (watches_of_device device);
-    device_watches := IntMap.add domid (device :: (IntMap.find domid !device_watches)) !device_watches
+    Mutex.execute watch_m (fun () ->
+      device_watches := IntMap.add domid (device :: (IntMap.find domid !device_watches)) !device_watches)
 
   let remove_device_watch xs device =
     let open Device_common in
@@ -3090,7 +3095,8 @@ module Actions = struct
     let current = IntMap.find domid !device_watches in
     let token = watch_token domid in
     List.iter (Xenstore_watch.unwatch ~xs token) (watches_of_device device);
-    device_watches := IntMap.add domid (List.filter (fun x -> x <> device) current) !device_watches
+    Mutex.execute watch_m (fun () ->
+      device_watches := IntMap.add domid (List.filter (fun x -> x <> device) current) !device_watches)
 
   let watch_fired xc xs path domains watches =
     let look_for_different_devices domid =
