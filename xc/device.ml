@@ -775,7 +775,6 @@ end
 (****************************************************************************************)
 (** Network SR-IOV VFs:                                                                 *)
 module NetSriovVf = struct
-
   let add  ~xs ~devid ~mac ?mtu ?(rate=None) ?(backend_domid=0) ?(other_config=[]) 
       ~pci ~vlan ~carrier ?(extra_private_keys=[]) ?(extra_xenserver_keys=[])
       (task: Xenops_task.task_handle) domid =
@@ -793,21 +792,24 @@ module NetSriovVf = struct
     let device = { backend = backend; frontend = frontend } in
     Generic.add_device ~xs device [] [] extra_private_keys (extra_xenserver_keys @ other_config);
     let rate_Mbps = match rate with
-      | Some (0L, _) | None -> None
+      | Some (0L, _) | None -> Some 0L
       | Some (rate, _) -> (match Int64.div rate 1024L with
         | 0L -> Some 1L
         | rate -> Some rate)
     in
-    let net_sriov_vf_config = Network_client.Client.Sriov.{
-      mac=Some mac;
-      vlan=vlan;
-      rate=rate_Mbps;}
+    let vlan = match vlan with
+      | Some _ as v -> v
+      | None -> Some 0L
+    in
+    let open Network_client.Client.Sriov in
+    let net_sriov_vf_config = {
+      mac = Some mac;
+      vlan = vlan;
+      rate = rate_Mbps;
+    }
     in
     begin
-      let ret = Network_client.Client.Sriov.make_vf_config
-        (Xenops_task.get_dbg task) pci net_sriov_vf_config
-      in
-      let open Network_client.Client.Sriov in
+      let ret = make_vf_config (Xenops_task.get_dbg task) pci net_sriov_vf_config in
       match ret with
       | Ok -> ()
       | Error Config_vf_rate_not_supported ->
