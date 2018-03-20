@@ -308,6 +308,10 @@ let make ~xc ~xs vm_info domain_config uuid =
 
         (* ...and a few corresponding private nodes for us to use. *)
         mksubdirs xenops_dom_path device_dirs zeroperm;
+        (* add usb directory to save usb device uid/gid when passing through usb to deprivileged guests.
+                For example, /dev/bus/usb/001/003 which is 0/0(root/root)*)
+        mksubdirs dom_path ["usb"] (Xenbus_utils.rwperm_for_guest 0);
+
       );
 
     xs.Xs.writev dom_path (filtered_xsdata vm_info.xsdata);

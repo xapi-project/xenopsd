@@ -1415,7 +1415,8 @@ module Vusb = struct
   let exec_usb_reset_script argv =
     try
       let stdout, stderr = Forkhelpers.execute_command_get_output !Xc_resources.usb_reset_script argv in
-      debug "usb_reset script %s returned stdout=%s stderr=%s" (String.concat " " argv) stdout stderr
+      debug "usb_reset script %s returned stdout=%s stderr=%s" (String.concat " " argv) stdout stderr;
+      stdout
     with err ->
       error "Failed to call usb_reset script with arguments %s" (String.concat " " argv);
       raise (Internal_error (Printf.sprintf "Call to usb reset failed: %s" (Printexc.to_string err)))
@@ -1423,9 +1424,21 @@ module Vusb = struct
   let cleanup domid =
     try
       let cmd = ["cleanup"; "-d"; string_of_int domid] in
-      exec_usb_reset_script cmd
+      ignore(exec_usb_reset_script cmd)
     with err ->
       warn "Failed to clean up VM %s: %s" (string_of_int domid) (Printexc.to_string err)
+
+  let save_uid_gid ~xs ~id ~domid ~uid_gid =
+    (* Save the uid gid of the device file to xenstore, as we need to restore
+       the uid/gid when the vusb is unplgugged.
+       eg. /local/domain/22/usb/vusb1-3-2-3/uid = "0" *)
+    let usb_path = Printf.sprintf "/local/domain/%d/usb/%s" domid
+        (Stdext.Xstringext.String.split '.' id |> String.concat "-") in
+    let dev_own= [
+      "uid",         List.nth uid_gid 0;
+      "gid",         List.nth uid_gid 1;
+    ] in
+    Xs.transaction xs (fun t -> t.Xst.writev usb_path dev_own)
 
   let usb_reset_attach ~hostbus ~hostport ~domid ~pid ~privileged =
     let argv =  List.concat [
@@ -1441,18 +1454,18 @@ module Vusb = struct
     in
     exec_usb_reset_script argv
 
-  let usb_reset_detach ~hostbus ~hostport ~domid ~privileged =
+  let usb_reset_detach ~hostbus ~hostport ~domid ~privileged ~uid ~gid =
     if not privileged then
       let argv = [ "detach"
                  ; hostbus ^ "-" ^ hostport
                  ; "-d"
                  ; string_of_int domid
                  ; "-i"
-                 ; "0"
-                 ; "0"
+                 ; uid
+                 ; gid
                  ]
       in
-      exec_usb_reset_script argv
+      ignore(exec_usb_reset_script argv)
 
   let qom_list ~xs ~domid =
     (*. 1. The QEMU Object Model(qom) provides a framework for registering user
@@ -1511,7 +1524,10 @@ module Vusb = struct
            Also need to do deprivileged work in usb_reset script if QEMU is deprivileged.
         *)
         begin match Qemu.pid ~xs domid with
-          | Some pid -> usb_reset_attach ~hostbus ~hostport ~domid ~pid ~privileged
+          | Some pid ->
+            let stdout = usb_reset_attach ~hostbus ~hostport ~domid ~pid ~privileged in
+            let uid_gid = String.trim stdout |> Stdext.Xstringext.String.split ' ' in
+            save_uid_gid ~xs ~id ~domid ~uid_gid
           | _ -> raise (Internal_error (Printf.sprintf "qemu pid does not exist for vm %d" domid))
         end;
         let cmd = Qmp.(Device_add Device.(
@@ -1522,7 +1538,7 @@ module Vusb = struct
                          }
                        }
                     ))
-        in qmp_send_cmd domid cmd |> ignore
+        in qmp_send_cmd domid cmd |> ignore;
       end
 
   let vusb_unplug ~xs ~privileged ~domid ~id ~hostbus ~hostport=
@@ -1536,7 +1552,22 @@ module Vusb = struct
              raise Device_not_connected
       )
       (fun () ->
-         usb_reset_detach ~hostbus ~hostport ~domid ~privileged
+         let usb_path = Printf.sprintf "/local/domain/%d/usb/%s" domid
+             (Stdext.Xstringext.String.split '.' id |> String.concat "-") in
+         let uid_path = Printf.sprintf "%s/%s" usb_path "uid" in
+         let gid_path = Printf.sprintf "%s/%s" usb_path "gid" in
+         let uid =
+           try xs.Xs.read uid_path
+           with _ -> "0"
+         in
+         let gid =
+           try xs.Xs.read gid_path
+           with _ -> "0"
+         in
+         usb_reset_detach ~hostbus ~hostport ~domid ~privileged ~uid ~gid;
+         xs.Xs.rm uid_path;
+         xs.Xs.rm gid_path;
+         xs.Xs.rm usb_path
       )
 
 end
