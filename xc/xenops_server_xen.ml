@@ -2040,7 +2040,19 @@ module VM = struct
     let _ = DB.update vm.Vm.id (fun d ->
         let non_persistent = match d with
           | None -> with_xc_and_xs (fun xc xs -> generate_non_persistent_state xc xs vm persistent)
-          | Some vmextra -> vmextra.VmExtra.non_persistent
+          | Some vmextra ->
+            (* Update timeoffset in non_persistent also *)
+            begin match vm.ty with
+              | HVM {timeoffset} ->
+                let c = VmExtra.(vmextra.non_persistent.create_info) in
+                let l = List.remove_assoc "timeoffset" c.Domain.platformdata in
+                { vmextra.VmExtra.non_persistent with
+                  VmExtra.create_info = { c with
+                                          Domain.platformdata = ("timeoffset", timeoffset) :: l
+                                        }
+                }
+              | _ -> vmextra.VmExtra.non_persistent
+            end
         in
         Some { VmExtra.persistent = persistent; VmExtra.non_persistent = non_persistent; }
       )
