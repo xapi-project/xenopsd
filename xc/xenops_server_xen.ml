@@ -78,7 +78,7 @@ type qemu_frontend =
 
 type attached_vdi = {
   domid: int;
-  attach_info: Storage_interface.attach_info;
+  attach_info: Storage_interface.backend;
 } [@@deriving rpc]
 
 module VmExtra = struct
@@ -233,6 +233,36 @@ let device_kind_of_backend_keys backend_keys =
   try Device_common.vbd_kind_of_string (List.assoc "backend-kind" backend_keys)
   with Not_found -> Device_common.Vbd !Xenopsd.default_vbd_backend_kind
 
+let params_of_backend backend =
+  (* TODO Is this vbd3 or Tapdisk3 (in which case we have to map it to vbd3)? *)
+  (* TODO why not an enum? *)
+  let backend_kind_of_xendisk xendisk = match xendisk.Storage_interface.backend_type with
+    | "Tapdisk3" -> "vbd3"
+    | "Qdisk" -> "qdisk"
+    | "Blkback" -> "vbd"
+    | x -> raise (Internal_error ("Unknown backend type " ^ x ^ " in backend: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
+  in
+  let blockdevs, xendisks =
+    let open Storage_interface in
+    List.fold_left
+      (fun (blockdevs, xendisks) ->
+         function
+         | BlockDevice b -> (b::blockdevs, xendisks)
+         (** TODO can we use Files? *)
+         | File f -> (blockdevs, xendisks)
+         | XenDisk x -> (blockdevs, x::xendisks)
+         | Nbd _ -> (blockdevs, xendisks))
+      ([], [])
+      backend.implementations
+  in
+  match blockdevs, xendisks with
+  | blockdev::_, _ -> (blockdev.Storage_interface.path, blockdev.Storage_interface.sm_data)
+  | _, xendisk::_ ->
+    let backend_kind = backend_kind_of_xendisk xendisk in
+    (xendisk.Storage_interface.params, ["backend-kind", backend_kind])
+  | [], [] ->
+    raise (Internal_error ("Could not find BlockDevice or XenDisk implementation: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
+
 let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
   let frontend_vm_id = get_uuid ~xc frontend_domid |> Uuidm.to_string in
   let backend_vm_id = get_uuid ~xc vdi.domid |> Uuidm.to_string in
@@ -240,21 +270,36 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
   | None ->
     error "VM = %s; domid = %d; Failed to determine domid of backend VM id: %s" frontend_vm_id frontend_domid backend_vm_id;
     raise (Does_not_exist("domain", backend_vm_id))
-  | Some backend_domid when backend_domid = frontend_domid ->
-    (* There's no need to use a PV disk if we're in the same domain *)
-    Name vdi.attach_info.Storage_interface.params
+  | Some backend_domid when backend_domid = frontend_domid -> begin
+      (* There's no need to use a PV disk if we're in the same domain *)
+      (* TODO Are the code paths for backend dom = frontend dom used at all? In
+       * xapi we already have code for circumventing xenopsd in that case.
+       * Or should I still update these codepaths, even if this is the case? *)
+      debug "XXXX create_vbd_frontend backend_domid = frontend_domid";
+      let open Storage_interface in
+      (* TODO handle NBD *)
+      let paths =
+        Xapi_stdext_std.Listext.List.filter_map
+          (function File {path} | BlockDevice {path; _} -> Some path | Nbd _ | XenDisk _ -> None)
+          vdi.attach_info.implementations
+      in
+      match paths with
+      | path::_ -> Name path
+      | [] -> raise (Internal_error ("Could not find File or BlockDevice implementation: " ^ (Storage_interface.rpc_of_backend vdi.attach_info |> Jsonrpc.to_string)))
+    end
   | Some backend_domid ->
-    let kind = device_kind_of_backend_keys vdi.attach_info.Storage_interface.xenstore_data in
+    let params, xenstore_data = params_of_backend vdi.attach_info in
+    let kind = device_kind_of_backend_keys xenstore_data in
     let t = {
       Device.Vbd.mode = Device.Vbd.ReadWrite;
       device_number = None; (* we don't mind *)
       phystype = Device.Vbd.Phys;
-      params = vdi.attach_info.Storage_interface.params;
+      params;
       dev_type = Device.Vbd.Disk;
       unpluggable = true;
       protocol = None;
       kind;
-      extra_backend_keys = List.map (fun (k, v) -> "sm-data/" ^ k, v) (vdi.attach_info.Storage_interface.xenstore_data);
+      extra_backend_keys = List.map (fun (k, v) -> "sm-data/" ^ k, v) xenstore_data;
       extra_private_keys = [];
       backend_domid = backend_domid;
     } in
@@ -2257,9 +2302,9 @@ module VBD = struct
     let attached_vdi = match vdi with
       | None ->
         (* XXX: do something better with CDROMs *)
-        { domid = this_domid ~xs; attach_info = { Storage_interface.params=""; o_direct=true; o_direct_reason=""; xenstore_data=[]; } }
+        { domid = this_domid ~xs; attach_info = Storage_interface.{ domain_uuid = "0"; implementations = [BlockDevice {path=""; sm_data=[]}] } }
       | Some (Local path) ->
-        { domid = this_domid ~xs; attach_info = { Storage_interface.params=path; o_direct=true; o_direct_reason=""; xenstore_data=[]; } }
+        { domid = this_domid ~xs; attach_info = Storage_interface.{ domain_uuid = "0"; implementations = [BlockDevice {path; sm_data=[]}] } }
       | Some (VDI path) ->
         let sr, vdi = Storage.get_disk_by_name task path in
         let dp = Storage.id_of (string_of_int frontend_domid) vbd.id in
@@ -2309,7 +2354,7 @@ module VBD = struct
         (* An empty VBD has to be a CDROM: anything will do *)
         Device_common.Vbd !Xenopsd.default_vbd_backend_kind
       | Some vdi ->
-        let xenstore_data = vdi.attach_info.Storage_interface.xenstore_data in
+        let _, xenstore_data = params_of_backend vdi.attach_info in
         (* Use the storage manager's preference *)
         if List.mem_assoc _backend_kind xenstore_data
         then Device_common.kind_of_string (List.assoc _backend_kind xenstore_data)
@@ -2327,10 +2372,11 @@ module VBD = struct
            then info "VM = %s; an empty CDROM drive on PV and PVinPVH guests is simulated by unplugging the whole drive" vm
            else begin
              let vdi = attach_and_activate task xc xs frontend_domid vbd vbd.backend in
+             let params, xenstore_data = params_of_backend vdi.attach_info in
 
              let extra_backend_keys = List.fold_left (fun acc (k,v) ->
                  let k = "sm-data/" ^ k in
-                 (k,v)::(List.remove_assoc k acc)) vbd.extra_backend_keys vdi.attach_info.Storage_interface.xenstore_data in
+                 (k,v)::(List.remove_assoc k acc)) vbd.extra_backend_keys xenstore_data in
 
              let kind = device_kind_of ~xs vbd in
 
@@ -2346,7 +2392,7 @@ module VBD = struct
                  );
                device_number = vbd.position;
                phystype = Device.Vbd.Phys;
-               params = vdi.attach_info.Storage_interface.params;
+               params;
                dev_type = (match vbd.ty with
                    | CDROM -> Device.Vbd.CDROM
                    | Disk -> Device.Vbd.Disk
@@ -2480,11 +2526,12 @@ module VBD = struct
          else begin
            let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of ~xs vbd) Newest (id_of vbd) in
            let vdi = attach_and_activate task xc xs frontend_domid vbd (Some disk) in
+           let params, xenstore_data = params_of_backend vdi.attach_info in
            let phystype = Device.Vbd.Phys in
            (* We store away the disk so we can implement VBD.stat *)
            xs.Xs.write (vdi_path_of_device ~xs device) (disk |> rpc_of_disk |> Jsonrpc.to_string);
-           Device.Vbd.media_insert ~xs ~dm:(dm_of ~vm) ~phystype ~params:vdi.attach_info.Storage_interface.params device;
-           Device_common.add_backend_keys ~xs device "sm-data" vdi.attach_info.Storage_interface.xenstore_data
+           Device.Vbd.media_insert ~xs ~dm:(dm_of ~vm) ~phystype ~params device;
+           Device_common.add_backend_keys ~xs device "sm-data" xenstore_data
          end
       ) Newest vm
 
