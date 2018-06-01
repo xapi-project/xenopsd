@@ -73,6 +73,7 @@ let choose_emu_manager x = choose_alternative _emu_manager !Xc_resources.emu_man
 
 type qemu_frontend =
   | Name of string (* block device path or bridge name *)
+  | Nbd of Storage_interface.nbd
   | Device of Device_common.device
   [@@deriving rpc]
 
@@ -242,26 +243,26 @@ let params_of_backend backend =
     | "Blkback" -> "vbd"
     | x -> raise (Internal_error ("Unknown backend type " ^ x ^ " in backend: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
   in
-  let blockdevs, xendisks =
+  let blockdevs, xendisks, nbds =
     let open Storage_interface in
     List.fold_left
-      (fun (blockdevs, xendisks) ->
+      (fun (blockdevs, xendisks, nbds) ->
          function
-         | BlockDevice b -> (b::blockdevs, xendisks)
+         | BlockDevice b -> (b::blockdevs, xendisks, nbds)
          (** TODO can we use Files? *)
-         | File f -> (blockdevs, xendisks)
-         | XenDisk x -> (blockdevs, x::xendisks)
-         | Nbd _ -> (blockdevs, xendisks))
-      ([], [])
+         | File f -> (blockdevs, xendisks, nbds)
+         | XenDisk x -> (blockdevs, x::xendisks, nbds)
+         | Nbd nbd -> (blockdevs, xendisks, nbd::nbds))
+      ([], [], [])
       backend.implementations
   in
-  match blockdevs, xendisks with
-  | blockdev::_, _ -> (blockdev.Storage_interface.path, blockdev.Storage_interface.sm_data)
-  | _, xendisk::_ ->
+  match blockdevs, xendisks, nbds with
+  | blockdev::_, _, _ -> (blockdev.Storage_interface.path, blockdev.Storage_interface.sm_data, [])
+  | _, xendisk::_, Storage_interface.{uri}::_ ->
     let backend_kind = backend_kind_of_xendisk xendisk in
-    (xendisk.Storage_interface.params, ["backend-kind", backend_kind])
-  | [], [] ->
-    raise (Internal_error ("Could not find BlockDevice or XenDisk implementation: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
+    (uri, ["backend-kind", backend_kind], ["qemu-params", xendisk.Storage_interface.params])
+  | _ ->
+    raise (Internal_error ("Could not find BlockDevice or both XenDisk & Nbd implementation: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
 
 let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
   let frontend_vm_id = get_uuid ~xc frontend_domid |> Uuidm.to_string in
@@ -272,23 +273,25 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
     raise (Does_not_exist("domain", backend_vm_id))
   | Some backend_domid when backend_domid = frontend_domid -> begin
       (* There's no need to use a PV disk if we're in the same domain *)
-      (* TODO Are the code paths for backend dom = frontend dom used at all? In
-       * xapi we already have code for circumventing xenopsd in that case.
-       * Or should I still update these codepaths, even if this is the case? *)
-      debug "XXXX create_vbd_frontend backend_domid = frontend_domid";
       let open Storage_interface in
-      (* TODO handle NBD *)
-      let paths =
-        Xapi_stdext_std.Listext.List.filter_map
-          (function File {path} | BlockDevice {path; _} -> Some path | Nbd _ | XenDisk _ -> None)
+      let paths, nbds =
+        List.fold_left
+          (fun (paths, nbds) -> function
+             (* TODO can we actually handle Files? *)
+             | File {path} | BlockDevice {path; _} -> (path::paths, nbds)
+             | Nbd nbd -> (paths, nbd::nbds)
+             | XenDisk _ -> (paths, nbds)
+          )
+          ([], [])
           vdi.attach_info.implementations
       in
-      match paths with
-      | path::_ -> Name path
-      | [] -> raise (Internal_error ("Could not find File or BlockDevice implementation: " ^ (Storage_interface.rpc_of_backend vdi.attach_info |> Jsonrpc.to_string)))
+      match paths, nbds with
+      | path::_, _ -> Name path
+      | _, nbd::_ -> Nbd nbd
+      | [], [] -> raise (Internal_error ("Could not find File, BlockDevice, or Nbd implementation: " ^ (Storage_interface.rpc_of_backend vdi.attach_info |> Jsonrpc.to_string)))
     end
   | Some backend_domid ->
-    let params, xenstore_data = params_of_backend vdi.attach_info in
+    let params, xenstore_data, extra_keys = params_of_backend vdi.attach_info in
     let kind = device_kind_of_backend_keys xenstore_data in
     let t = {
       Device.Vbd.mode = Device.Vbd.ReadWrite;
@@ -299,7 +302,7 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
       unpluggable = true;
       protocol = None;
       kind;
-      extra_backend_keys = List.map (fun (k, v) -> "sm-data/" ^ k, v) xenstore_data;
+      extra_backend_keys = (List.map (fun (k, v) -> "sm-data/" ^ k, v) xenstore_data) @ extra_keys;
       extra_private_keys = [];
       backend_domid = backend_domid;
     } in
@@ -307,15 +310,9 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
         (fun () -> Device.Vbd.add task ~xc ~xs ~hvm:false t frontend_domid) in
     Device device
 
-let block_device_of_vbd_frontend = function
-  | Name x -> x
-  | Device device ->
-    let open Device_common in
-    device.frontend.devid |> Device_number.of_xenstore_key |> Device_number.to_linux_device |> (fun x -> "/dev/" ^ x)
-
 let destroy_vbd_frontend ~xc ~xs task disk =
   match disk with
-  | Name _ -> ()
+  | Name _ | Nbd _ -> ()
   | Device device ->
     Xenops_task.with_subtask task "Vbd.clean_shutdown"
       (fun () ->
@@ -392,6 +389,25 @@ module NbdClient = struct
          with e ->
            warn "ignoring exception while disconnecting nbd-client from %s: %s" nbd_device (Printexc.to_string e)
       )
+
+  let parse_nbd_uri nbd =
+    let Storage_interface.{ uri } = nbd in
+    let fail () =
+      raise (Internal_error ("Unexpected NBD URI returned from the storage backend: " ^ uri))
+    in
+    match String.split_on_char ':' uri with
+    | ["nbd"; "unix"; socket; exportname] -> begin
+        let prefix = "exportname=" in
+        match Astring.String.cuts ~empty:false ~sep:prefix exportname with
+        | [exportname] ->
+          (socket, exportname)
+        | _ -> fail ()
+      end
+    | _ -> fail ()
+
+  let with_nbd_device ~nbd =
+    let unix_socket_path, export_name = parse_nbd_uri nbd in
+    with_nbd_device ~unix_socket_path ~export_name
 end
 
 let with_disk ~xc ~xs task disk write f = match disk with
@@ -409,16 +425,12 @@ let with_disk ~xc ~xs task disk write f = match disk with
          let device = create_vbd_frontend ~xc ~xs task frontend_domid vdi in
          finally
            (fun () ->
-              let block_device = device |> block_device_of_vbd_frontend in
-              let nbd_prefix = "hack|nbd:unix:" in
-              let is_nbd = Astring.String.is_prefix ~affix:nbd_prefix block_device in
-              if is_nbd then begin
-                debug "with_disk: using nbd-client for block device %s" block_device;
-                let unix_socket_path = block_device |> Astring.String.cuts ~empty:false ~sep:nbd_prefix |> List.hd |> String.split_on_char '|' |> List.hd in
-                NbdClient.with_nbd_device ~unix_socket_path ~export_name:"qemu_node" f
-              end else begin
-                f block_device
-              end
+              match device with
+              | Name path -> f path
+              | Device device -> f (Device_common.block_device_of_device device)
+              | Nbd nbd ->
+                debug "with_disk: using nbd-client for %s" (Storage_interface.rpc_of_nbd nbd |> Jsonrpc.to_string);
+                NbdClient.with_nbd_device ~nbd f
            )
            (fun () ->
               destroy_vbd_frontend ~xc ~xs task device
@@ -1295,6 +1307,11 @@ module VM = struct
       Mem.balance_memory (Xenops_task.get_dbg task)
     ) Newest task vm
 
+  let qemu_device_of_vbd_frontend = function
+    | Name x -> x
+    | Nbd Storage_interface.{ uri } -> uri
+    | Device device -> Device_common.block_device_of_device device
+
   (* NB: the arguments which affect the qemu configuration must be saved and
      restored with the VM. *)
   let create_device_model_config vm vmextra vbds vifs vgpus vusbs = match vmextra.VmExtra.persistent with
@@ -1360,7 +1377,7 @@ module VM = struct
             if hvm_info.Vm.qemu_disk_cmdline && (List.mem_assoc id qemu_vbds)
             then
               let index, bd = List.assoc id qemu_vbds in
-              let path = block_device_of_vbd_frontend bd in
+              let path = qemu_device_of_vbd_frontend bd in
               let media =
                 if vbd.Vbd.ty = Vbd.Disk
                 then Device.Dm.Disk else Device.Dm.Cdrom in
@@ -2354,7 +2371,7 @@ module VBD = struct
         (* An empty VBD has to be a CDROM: anything will do *)
         Device_common.Vbd !Xenopsd.default_vbd_backend_kind
       | Some vdi ->
-        let _, xenstore_data = params_of_backend vdi.attach_info in
+        let _, xenstore_data, _ = params_of_backend vdi.attach_info in
         (* Use the storage manager's preference *)
         if List.mem_assoc _backend_kind xenstore_data
         then Device_common.kind_of_string (List.assoc _backend_kind xenstore_data)
@@ -2372,11 +2389,11 @@ module VBD = struct
            then info "VM = %s; an empty CDROM drive on PV and PVinPVH guests is simulated by unplugging the whole drive" vm
            else begin
              let vdi = attach_and_activate task xc xs frontend_domid vbd vbd.backend in
-             let params, xenstore_data = params_of_backend vdi.attach_info in
+             let params, xenstore_data, extra_keys = params_of_backend vdi.attach_info in
 
+             let new_keys = (List.map (fun (k, v) -> "sm-data/" ^ k, v) xenstore_data) @ extra_keys in
              let extra_backend_keys = List.fold_left (fun acc (k,v) ->
-                 let k = "sm-data/" ^ k in
-                 (k,v)::(List.remove_assoc k acc)) vbd.extra_backend_keys xenstore_data in
+                 (k,v)::(List.remove_assoc k acc)) vbd.extra_backend_keys new_keys in
 
              let kind = device_kind_of ~xs vbd in
 
@@ -2526,7 +2543,7 @@ module VBD = struct
          else begin
            let (device: Device_common.device) = device_by_id xc xs vm (device_kind_of ~xs vbd) Newest (id_of vbd) in
            let vdi = attach_and_activate task xc xs frontend_domid vbd (Some disk) in
-           let params, xenstore_data = params_of_backend vdi.attach_info in
+           let params, xenstore_data, _ = params_of_backend vdi.attach_info in
            let phystype = Device.Vbd.Phys in
            (* We store away the disk so we can implement VBD.stat *)
            xs.Xs.write (vdi_path_of_device ~xs device) (disk |> rpc_of_disk |> Jsonrpc.to_string);
