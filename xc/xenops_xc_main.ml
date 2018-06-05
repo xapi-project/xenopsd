@@ -55,5 +55,8 @@ let _ =
     ();
   check_domain0_uuid ();
   make_var_run_xen ();
+  Printf.printf "Forgetting client\n%!";
+  Xenstore.forget_client ();
+  Xenstore.caching_enabled := true;
   Xenopsd.main
     (module Xenops_server_xen: Xenops_server_plugin.S)

@@ -618,16 +618,22 @@ module TypedTable = functor(I: ITEM) -> struct
      Note that `f` should never itself include an `add`, `remove` or another
      `update` or deadlock will occur! *)
   let update (k: I.key) (f: t option -> t option) : bool =
+    let before = Unix.gettimeofday () in
     Mutex.execute m (fun () ->
+      let start = Unix.gettimeofday () in
       let x = read k in
       let y = f x in
       (* Only update the DB if the value has changed *)
-      if x <> y then
+      let result = if x <> y then
         match y with
         | None    -> delete k; true
         | Some y' -> write k y'; true
       else
         false
+      in
+      let endtime = Unix.gettimeofday () in
+      debug "TypedTable.update: %s held lock for %f seconds (after waiting %f seconds to get the lock)" I.namespace (endtime -. start) (start -. before);
+      result
     )
 
   let rename (k: I.key) (k': I.key) =

@@ -248,6 +248,7 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid =
     let rwperm = Xenbus_utils.rwperm_for_guest domid in
     let zeroperm = Xenbus_utils.rwperm_for_guest 0 in
     debug "VM = %s; creating xenstored tree: %s" (Uuid.to_string uuid) dom_path;
+    let starttime = Unix.gettimeofday () in
 
     let create_time = Mtime.to_uint64_ns (Mtime_clock.now ()) in
     Xs.transaction xs (fun t ->
@@ -331,26 +332,30 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid =
         mksubdirs xenops_dom_path device_dirs zeroperm;
       );
 
-    xs.Xs.writev dom_path (filtered_xsdata vm_info.xsdata);
-    xs.Xs.writev (dom_path ^ "/platform") vm_info.platformdata;
+    Xs.transaction xs (fun t ->
 
-    xs.Xs.writev (dom_path ^ "/bios-strings") vm_info.bios_strings;
-    if vm_info.is_uefi then
-      xs.Xs.write (dom_path ^ "/hvmloader/bios") "ovmf";
+      t.Xs.writev dom_path (filtered_xsdata vm_info.xsdata);
+      t.Xs.writev (dom_path ^ "/platform") vm_info.platformdata;
+
+      t.Xs.writev (dom_path ^ "/bios-strings") vm_info.bios_strings;
+      if vm_info.is_uefi then
+        t.Xs.write (dom_path ^ "/hvmloader/bios") "ovmf";
 
     (* If a toolstack sees a domain which it should own in this state then the
        		   domain is not completely setup and should be shutdown. *)
-    xs.Xs.write (dom_path ^ "/action-request") "poweroff";
+      t.Xs.write (dom_path ^ "/action-request") "poweroff";
 
-    xs.Xs.write (dom_path ^ "/control/platform-feature-multiprocessor-suspend") "1";
+      t.Xs.write (dom_path ^ "/control/platform-feature-multiprocessor-suspend") "1";
 
-    xs.Xs.write (dom_path ^ "/control/has-vendor-device") (if vm_info.has_vendor_device then "1" else "0");
+      t.Xs.write (dom_path ^ "/control/has-vendor-device") (if vm_info.has_vendor_device then "1" else "0");
 
     (* CA-30811: let the linux guest agent easily determine if this is a fresh domain even if
        		   the domid hasn't changed (consider cross-host migrate) *)
-    xs.Xs.write (dom_path ^ "/unique-domain-id") (Uuid.to_string (Uuid.create `V4));
+      t.Xs.write (dom_path ^ "/unique-domain-id") (Uuid.to_string (Uuid.create `V4)));
 
-    info "VM = %s; domid = %d" (Uuid.to_string uuid) domid;
+    let endtime = Unix.gettimeofday () in
+    info "VM = %s; domid = %d (elapsed: %f)" (Uuid.to_string uuid) domid (endtime -. starttime);
+
     domid
   with e ->
     debug "VM = %s; domid = %d; Caught exception while creating xenstore tree: %s" (Uuid.to_string uuid) domid (Printexc.to_string e);
@@ -420,7 +425,7 @@ let shutdown ~xc ~xs domid req =
 let shutdown_wait_for_ack (t: Xenops_task.task_handle) ~timeout ~xc ~xs domid (domain_type : [`pv | `pvh | `hvm])  req =
   let di = Xenctrl.domain_getinfo xc domid in
   let uuid = get_uuid ~xc domid in
-  let expecting_ack = 
+  let expecting_ack =
     match di.Xenctrl.hvm_guest, domain_type with
     | false, _ -> true (* PV guests always acknowledge *)
     | true, `pvh -> true (* PVH guests are also always enlightened *)
@@ -478,7 +483,7 @@ let destroy (task: Xenops_task.task_handle) ~xc ~xs ~qemu_domid ~dm domid =
          ("Reset PCI device " ^ string_of_address pcidev)
          (fun () -> Device.PCI.reset ~xs pcidev) ())
     all_pci_devices;
-  
+
   (* PCI specification document says that the Function must complete the FLR within 100 ms
     https://pcisig.com/sites/default/files/specification_documents/ECN_RN_29_Aug_2013.pdf on page 7 *)
   Thread.delay 0.1;

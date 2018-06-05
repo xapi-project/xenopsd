@@ -120,6 +120,7 @@ let wait_for_plug (task: Xenops_task.task_handle) ~xs (x: device) =
       (fun () ->
          let path = path_written_by_hotplug_scripts x in
          let error_path = error_path_written_by_hotplug_scripts x in
+         debug "waiting for %s or %s" path error_path;
          let (_: bool) = cancellable_watch (Device x) [
              Watch.map (fun _ -> ()) (Watch.value_to_appear path);
              Watch.map (fun _ -> ()) (Watch.value_to_appear error_path);

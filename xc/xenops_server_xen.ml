@@ -1071,11 +1071,28 @@ module VM = struct
                  } in
                Some VmExtra.{persistent}
              end) in
+
          let _ = DB.update k (fun vmextra ->
-           let persistent = match vmextra with
-           | Some x -> x.VmExtra.persistent
-           | None -> failwith "Interleaving problem"
-           in
+           match vmextra with
+           | Some VmExtra.{persistent} -> begin
+             match persistent.VmExtra.domain_config with
+             | Some dc -> Some VmExtra.{persistent}
+             | None ->
+                  (* This is the upgraded migration/resume case - we've stored some persistent data
+                    but it was before we recorded emulation flags. Let's regenerate them now and
+                    store them persistently *)
+                begin (* Sanity check *)
+                  match vm.Xenops_interface.Vm.ty with
+                  | PVinPVH _ -> failwith "Invalid state! No domain_config persistently stored for PVinPVH domain";
+                  | _ -> ()
+                end;
+                let domain_config = VmExtra.domain_config_of_vm vm in
+                Some VmExtra.{persistent={persistent with domain_config = Some domain_config }}
+             end
+           | None -> failwith "Interleaving problem") in
+
+         let VmExtra.{persistent} = DB.read_exn vm.Vm.id in
+
          let shadow_multiplier = match vm.Vm.ty with
            | Vm.HVM { Vm.shadow_multiplier = sm } -> sm
            | _ -> 1.
@@ -1104,6 +1121,8 @@ module VM = struct
          and max_kib = kib_of_bytes_used (max_bytes +++ overhead_bytes) in
          (* XXX: we would like to be able to cancel an in-progress with_reservation *)
          let dbg = Xenops_task.get_dbg task in
+
+
          Mem.with_reservation dbg min_kib max_kib
            (fun target_plus_overhead_kib reservation_id ->
               let domain_config, persistent =
@@ -1149,10 +1168,7 @@ module VM = struct
                 Device.Vcpu.add ~xs ~dm:(dm_of ~vm) ~devid:i domid (i < vm.vcpus)
               done;
               set_domain_type ~xs domid vm;
-              Some VmExtra.{persistent}
            )
-       )
-      in ()
     )
   let create = create_exn
 
@@ -3327,13 +3343,13 @@ module Actions = struct
         | _ -> ()
       end
 
-  let add_device_watch xs dev =
+  let add_device_watch xs watch_cb device =
     let open Device_common in
     debug "Adding watches for: %s" (string_of_device dev);
     let domid = dev.frontend.domid in
     let token = watch_token domid in
-    List.iter (Xenstore_watch.watch ~xs token) (watches_of_device dev);
-    device_watches := IntMap.add domid (dev :: (IntMap.find domid !device_watches)) !device_watches
+    List.iter (Xenstore_watch.watch ~xs token watch_cb) (watches_of_device device);
+    device_watches := IntMap.add domid (device :: (IntMap.find domid !device_watches)) !device_watches
 
   let remove_device_watch xs dev =
     let open Device_common in
@@ -3344,7 +3360,8 @@ module Actions = struct
     List.iter (Xenstore_watch.unwatch ~xs token) (watches_of_device dev);
     device_watches := IntMap.add domid (List.filter (fun x -> x <> dev) current) !device_watches
 
-  let watch_fired xc xs path domains watches =
+  let watch_fired xc xs path domains watches watch_cb =
+    debug "In Actions.watch_fired: path=%s" path;
     let look_for_different_devices domid =
       if not(Xenstore_watch.IntSet.mem domid watches)
       then debug "Ignoring frontend device watch on unmanaged domain: %d" domid
@@ -3355,7 +3372,7 @@ module Actions = struct
         let devices' = Device_common.list_frontends ~xs domid in
         let old_devices = Stdext.Listext.List.set_difference devices devices' in
         let new_devices = Stdext.Listext.List.set_difference devices' devices in
-        List.iter (add_device_watch xs) new_devices;
+        List.iter (add_device_watch xs watch_cb) new_devices;
         List.iter (remove_device_watch xs) old_devices;
       end in
 
