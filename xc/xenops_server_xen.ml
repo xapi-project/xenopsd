@@ -243,26 +243,34 @@ let params_of_backend backend =
     | "Blkback" -> "vbd"
     | x -> raise (Internal_error ("Unknown backend type " ^ x ^ " in backend: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
   in
-  let blockdevs, xendisks, nbds =
+  let blockdevs, files, xendisks, nbds =
     let open Storage_interface in
     List.fold_left
-      (fun (blockdevs, xendisks, nbds) ->
+      (fun (blockdevs, files, xendisks, nbds) ->
          function
-         | BlockDevice b -> (b::blockdevs, xendisks, nbds)
-         (** TODO can we use Files? *)
-         | File f -> (blockdevs, xendisks, nbds)
-         | XenDisk x -> (blockdevs, x::xendisks, nbds)
-         | Nbd nbd -> (blockdevs, xendisks, nbd::nbds))
-      ([], [], [])
+         | BlockDevice b -> (b::blockdevs, files, xendisks, nbds)
+         | File f -> (blockdevs, f::files, xendisks, nbds)
+         | XenDisk x -> (blockdevs, files, x::xendisks, nbds)
+         | Nbd nbd -> (blockdevs, files, xendisks, nbd::nbds))
+      ([], [], [], [])
       backend.implementations
   in
-  match blockdevs, xendisks, nbds with
-  | blockdev::_, _, _ -> (blockdev.Storage_interface.path, blockdev.Storage_interface.sm_data, [])
-  | _, xendisk::_, Storage_interface.{uri}::_ ->
-    let backend_kind = backend_kind_of_xendisk xendisk in
-    (uri, ["backend-kind", backend_kind], ["qemu-params", xendisk.Storage_interface.params])
+  let xenstore_data = match xendisks with
+    | xendisk::_ ->
+      let backend_kind = backend_kind_of_xendisk xendisk in
+      let xenstore_data = xendisk.Storage_interface.extra in
+      if List.mem_assoc backend_kind xenstore_data then xenstore_data else ["backend-kind", backend_kind] @ xenstore_data
+    | [] ->
+      raise (Internal_error ("Could not find XenDisk implementation: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
+  in
+  let open Storage_interface in
+  let params, extra_keys = match blockdevs, files, nbds, xendisks with
+  | {path}::_, _, _, _ | _, {path}::_, _, _ -> (path, [])
+  | _, _, {uri}::_, xendisk::_ -> (uri, ["qemu-params", xendisk.Storage_interface.params])
   | _ ->
-    raise (Internal_error ("Could not find BlockDevice or both XenDisk & Nbd implementation: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
+    raise (Internal_error ("Could not find BlockDevice, File, or Nbd implementation: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
+  in
+  (params, xenstore_data, extra_keys)
 
 let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
   let frontend_vm_id = get_uuid ~xc frontend_domid |> Uuidm.to_string in
@@ -277,7 +285,6 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
       let paths, nbds =
         List.fold_left
           (fun (paths, nbds) -> function
-             (* TODO can we actually handle Files? *)
              | File {path} | BlockDevice {path; _} -> (path::paths, nbds)
              | Nbd nbd -> (paths, nbd::nbds)
              | XenDisk _ -> (paths, nbds)
@@ -2319,9 +2326,9 @@ module VBD = struct
     let attached_vdi = match vdi with
       | None ->
         (* XXX: do something better with CDROMs *)
-        { domid = this_domid ~xs; attach_info = Storage_interface.{ domain_uuid = "0"; implementations = [BlockDevice {path=""; sm_data=[]}] } }
+        { domid = this_domid ~xs; attach_info = Storage_interface.{ domain_uuid = "0"; implementations = [XenDisk {params="";extra=[];backend_type="Tapdisk3"}; BlockDevice {path=""}] } }
       | Some (Local path) ->
-        { domid = this_domid ~xs; attach_info = Storage_interface.{ domain_uuid = "0"; implementations = [BlockDevice {path; sm_data=[]}] } }
+        { domid = this_domid ~xs; attach_info = Storage_interface.{ domain_uuid = "0"; implementations = [XenDisk {params=path;extra=[];backend_type="Tapdisk3"}; BlockDevice {path}] } }
       | Some (VDI path) ->
         let sr, vdi = Storage.get_disk_by_name task path in
         let dp = Storage.id_of (string_of_int frontend_domid) vbd.id in
