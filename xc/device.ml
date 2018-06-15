@@ -1077,13 +1077,16 @@ module PCI = struct
     driver: string;
   }
 
+  exception Domain_not_running of Xenops_interface.Pci.address * int
   exception Cannot_add of Xenops_interface.Pci.address list * exn (* devices, reason *)
   exception Cannot_use_pci_with_no_pciback of t list
 
+  (* From https://github.com/torvalds/linux/blob/v4.19/include/linux/pci.h#L76-L102 *)
   (* same as libxl_internal: PROC_PCI_NUM_RESOURCES *)
   let _proc_pci_num_resources = 7
   (* same as libxl_internal: PCI_BAR_IO *)
   let _pci_bar_io = 0x01L
+  let _page_size = 4096
 
   (* XXX: we don't want to use the 'xl' command here because the "interface"
      isn't considered as stable as the C API *)
@@ -1131,18 +1134,56 @@ module PCI = struct
     (* Sort into the order the devices were plugged *)
     List.sort (fun a b -> compare (fst a) (fst b)) pairs
 
-  let add ~xs pcidevs domid =
+  let _pci_add ~xc ~xs domid (pcidev, bdf) =
+    let open Xenops_interface.Pci in
+    let sysfs_pci_dev = "/sys/bus/pci/devices/" in
+    if (Qemu.is_running ~xs domid) then
+      begin
+        let _qmp_result = qmp_send_cmd domid
+            (Qmp.Device_add {driver="xen-pci-passthrough";
+                             device=Qmp.Device.PCI({id=string_of_address pcidev;
+                                                    dev=bdf.dev; fn=bdf.fn;
+                                                    hostaddr=string_of_address pcidev;
+                                                    permissive=false})}) in
+        let addresses = (sysfs_pci_dev ^ (string_of_address bdf) ^ "/resource")
+                        |> Unixext.string_of_file
+                        |> String.split_on_char '\n'
+        in
+        List.iteri (fun i addr ->
+            if i < _proc_pci_num_resources then
+              Scanf.sscanf addr "0x%llx 0x%llx 0x%llx\n" (fun scan_start scan_end scan_flags ->
+                  if scan_start <> 0 then
+                    let size = scan_end - scan_start + 1 in
+                    let scan_start = if scan_flags <> 0 then scan_start else scan_start lsr 12 in
+                    let size = if size <> 0 then size else (_page_size + size - 1) lsr 12 in
+                    Xenctrl.domain_iomem_permission xc domid
+                      (Nativeint.of_int scan_start) (Nativeint.of_int size) true
+                )
+          )
+          addresses;
+        (sysfs_pci_dev ^ (Pci.string_of_address bdf))
+        |> Unixext.string_of_file
+        |> Int64.of_string
+        |> Xenctrlext.physdev_map_pirq xc domid
+        |> fun x -> Xenctrl.domain_irq_permission xc domid x true
+      end
+    else
+      raise (Domain_not_running (pcidev, domid))
+
+
+  let add ~xc ~xs pcidevs domid =
     try
-      let current = read_pcidir ~xs domid in
-      let next_idx = List.fold_left max (-1) (List.map fst current) + 1 in
-      add_xl pcidevs domid;
-      List.iteri
-        (fun count address ->
+      if !Xenopsd.use_old_pci_add then
+        add_xl (List.map (fun (a,_) -> a) pcidevs) domid
+      else
+        List.iter (fun (pcidev, dev) -> _pci_add ~xc ~xs domid (pcidev, Pci.{domain=0; bus=0; dev=dev; fn=0})) pcidevs;
+      List.iter
+        (fun (pcidev, dev) ->
            xs.Xs.write
-             (device_model_pci_device_path xs 0 domid ^ "/dev-" ^ string_of_int (next_idx + count))
-             (Xenops_interface.Pci.string_of_address address))
+             (Printf.sprintf "%s/dev-%s" (device_model_pci_device_path xs 0 domid) (string_of_int dev))
+             (Pci.string_of_address pcidev))
         pcidevs
-    with exn -> raise (Cannot_add (pcidevs, exn))
+    with exn -> raise (Cannot_add ((List.rev_map (fun (a,_) -> a) pcidevs), exn))
 
   let release pcidevs domid =
     release_xl pcidevs domid
@@ -1380,9 +1421,7 @@ module PCI = struct
       )
 
   (* Return a list of PCI devices *)
-  let list ~xs domid =
-    (* replace the sort index with the default '0' -- XXX must figure out whether this matters to anyone *)
-    List.map (fun (_, y) -> (0, y)) (read_pcidir ~xs domid)
+  let list = read_pcidir
 
   (* We explicitly add a device frontend in the hotplug case so the device watch code
      can find the backend and monitor it. *)

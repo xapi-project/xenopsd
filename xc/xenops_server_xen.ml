@@ -2220,6 +2220,14 @@ module PCI = struct
        to release resources/ deassign devices *)
     if not state.plugged then Some Needs_unplug else None
 
+  let get_next_pci_index ~xs domid =
+    let current = Device.PCI.list ~xs domid in
+    let max_idx = function
+      | [] -> failwith "PCI dir list was empty - this is not expected"
+      | x::xs -> List.fold_left max x xs
+    in
+    1 + max_idx (List.map fst current)
+
   let plug task vm pci =
     on_frontend
       (fun xc xs frontend_domid _ ->
@@ -2239,7 +2247,7 @@ module PCI = struct
          end;
 
          Device.PCI.bind [ pci.address ] Device.PCI.Pciback;
-         Device.PCI.add xs [ pci.address ] frontend_domid
+         Device.PCI.add ~xc ~xs [ (pci.address, get_next_pci_index ~xs frontend_domid) ] frontend_domid
       ) vm
 
   let unplug task vm pci =
