@@ -397,23 +397,8 @@ module NbdClient = struct
            warn "ignoring exception while disconnecting nbd-client from %s: %s" nbd_device (Printexc.to_string e)
       )
 
-  let parse_nbd_uri nbd =
-    let Storage_interface.{ uri } = nbd in
-    let fail () =
-      raise (Internal_error ("Unexpected NBD URI returned from the storage backend: " ^ uri))
-    in
-    match String.split_on_char ':' uri with
-    | ["nbd"; "unix"; socket; exportname] -> begin
-        let prefix = "exportname=" in
-        match Astring.String.cuts ~empty:false ~sep:prefix exportname with
-        | [exportname] ->
-          (socket, exportname)
-        | _ -> fail ()
-      end
-    | _ -> fail ()
-
   let with_nbd_device ~nbd =
-    let unix_socket_path, export_name = parse_nbd_uri nbd in
+    let unix_socket_path, export_name = Storage_interface.parse_nbd_uri nbd in
     with_nbd_device ~unix_socket_path ~export_name
 end
 
