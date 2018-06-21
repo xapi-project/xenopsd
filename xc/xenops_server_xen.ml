@@ -259,7 +259,7 @@ let params_of_backend backend =
     | xendisk::_ ->
       let backend_kind = backend_kind_of_xendisk xendisk in
       let xenstore_data = xendisk.Storage_interface.extra in
-      if List.mem_assoc backend_kind xenstore_data then xenstore_data else ["backend-kind", backend_kind] @ xenstore_data
+      if List.mem_assoc backend_kind xenstore_data then xenstore_data else ("backend-kind", backend_kind) :: xenstore_data
     | [] ->
       raise (Internal_error ("Could not find XenDisk implementation: " ^ (Storage_interface.rpc_of_backend backend |> Jsonrpc.to_string)))
   in
