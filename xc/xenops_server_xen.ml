@@ -91,11 +91,18 @@ module VmExtra = struct
     | PVinPVH _ -> X86 { emulation_flags = emulation_flags_pvh }
     | HVM _     -> X86 { emulation_flags = emulation_flags_all }
 
+  (* Known versions of the VM persistent metadata created by xenopsd *)
+  let persistent_version_pre_lima = 0
+  let persistent_version_lima     = 1
 
   (** Extra data we store per VM. The persistent data is preserved when
       the domain is suspended so it can be re-used in the following 'create'
       which is part of 'resume'. *)
   type persistent_t = {
+    (* This field indicates the version of the persistent record with which
+       the VM started, and it stays constant through xenopsd VM migration,
+       resume etc operations until the VM shuts down. *)
+    version: int;
     build_info: Domain.build_info option;
     ty: Vm.builder_info option;
     last_start_time: float;
@@ -112,7 +119,11 @@ module VmExtra = struct
   } [@@deriving rpc]
 
   let default_persistent_t =
-    { build_info = None
+    { 
+      (* The default version 0 indicates that the persistent record was created by a VM-start
+         operation using an old pre-Lima xenopsd version that didn't have a version field. *)
+      version = persistent_version_pre_lima
+    ; build_info = None
     ; ty = None
     ; last_start_time = 0.0
     ; domain_config = None
@@ -146,6 +157,23 @@ module DB = struct
       type key = string
       let key vm = [ vm ]
     end)
+
+  (* This function will leave untouched the profile of any VM started with the xenopsd persistent
+     record version 1 (or later), and it will revise the profile of any qemu-trad VM started with
+     a persistent record without a version field (which defaults to version 0) *)
+  let revise_profile_qemu_trad vm persistent =
+      Device.Profile.{persistent with VmExtra.profile =
+        match persistent.VmExtra.profile with
+        | Some Qemu_trad when persistent.VmExtra.version = VmExtra.persistent_version_pre_lima ->
+          debug "vm %s: revised %s->%s" vm Name.qemu_trad Name.qemu_upstream_compat;
+          Some Qemu_upstream_compat
+        | x -> x
+      }
+
+  let revision_of vm persistent =
+    persistent
+    |> revise_profile_qemu_trad vm
+
 end
 
 (* These updates are local plugin updates, distinct from those that are
@@ -952,7 +980,10 @@ module VM = struct
               debug "VM = %s; has no stored domain-level configuration, regenerating" vm.Vm.id;
                let persistent =
                  VmExtra.{ default_persistent_t with
-                           ty = Some vm.ty
+                           (* version 1 and later distinguish VMs started in Lima and later versions of xenopsd
+                              from those VMs started in pre-Lima versions that didn't have this version field *)
+                           version = VmExtra.persistent_version_lima
+                         ; ty = Some vm.ty
                          ; last_start_time = Unix.gettimeofday ()
                          ; domain_config = Some (VmExtra.domain_config_of_vm vm)
                          ; nomigrate = Platform.is_true
@@ -2052,7 +2083,9 @@ module VM = struct
         end
       | _ -> persistent
     in
-    let persistent = { persistent with VmExtra.profile = profile_of ~vm } in
+    let persistent = { persistent with VmExtra.profile = profile_of ~vm }
+      |> DB.revision_of k
+    in
     persistent |> VmExtra.rpc_of_persistent_t |> Jsonrpc.to_string |> fun state_new ->
       debug "vm %s: persisting metadata %s" k state_new;
       (if state_new <> state then debug "vm %s: different original metadata %s" k state)
