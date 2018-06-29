@@ -2497,8 +2497,13 @@ module Backend = struct
             | Dm_Common.Disk  -> "force-lba=on"
             | Dm_Common.Cdrom -> "force-lba=off"
           in
-          List.map (fun (index, file, media) -> [
-              "-drive"; String.concat "," ([
+          List.map (fun (index, file, media) ->
+            let file = file ^ match String.startswith "nbd:unix:" file with
+              | true  -> ":exportname=qemu_node"
+              | false -> ""
+            in
+            [ "-drive"; String.concat ","
+             ([
                 sprintf "file=%s" file;
                 "if=ide";
                 sprintf "index=%d" index;
