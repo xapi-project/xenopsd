@@ -68,6 +68,7 @@ type create_info = {
   platformdata: (string * string) list;
   bios_strings: (string * string) list;
   has_vendor_device: bool;
+  is_uefi: bool;
 }
 val create_info_of_rpc: Rpc.t -> create_info
 val rpc_of_create_info: create_info -> Rpc.t
