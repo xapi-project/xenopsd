@@ -1987,6 +1987,7 @@ module Dm_Common = struct
           debug "deleting %s" path;
           Unixext.unlink_safe path)
         [ efivars_init_path domid
+        ; efivars_resume_path domid
         ; efivars_save_path domid
         ]
     in
@@ -2788,6 +2789,7 @@ module Dm = struct
       on (not reset_on_boot) @@ Add.many @@ argf "uuid:%s" vm_uuid >>= fun () ->
       on restore @@ Add.arg "--resume" >>= fun () ->
       Add.optional (argf "init:%s") efivars_init >>= fun () ->
+      on restore @@ Add.many @@ argf "resume:%s" (efivars_resume_path domid) >>= fun () ->
       Add.many @@ argf "save:%s" (efivars_save_path domid)
     in
     let args = Fe_argv.run args |> snd |> Fe_argv.argv in
@@ -2872,7 +2874,7 @@ module Dm = struct
 
     (* start varstored if appropriate *)
     if info.firmware = Some Uefi then
-      start_varstored ~xs ~nvram:info.nvram task domid;
+      start_varstored ~restore:(action=Restore) ~xs ~nvram:info.nvram task domid;
 
     (* Execute qemu-dm-wrapper, forwarding stdout to the syslog, with the key "qemu-dm-<domid>" *)
 
@@ -2937,9 +2939,17 @@ module Dm = struct
     debug "Called Dm.restore_vgpu";
     start_vgpu ~xs task ~restore:true domid [vgpu] vcpus Profile.Qemu_trad
 
-  let restore_varstored (task: Xenops_task.task_handle) ~xs domid =
+  let suspend_varstored (task: Xenops_task.task_handle) ~xs domid =
+    debug "Called Dm.suspend_varstored";
+    Varstored.stop ~xs domid;
+    Unixext.string_of_file (efivars_save_path domid)
+
+  let restore_varstored (task: Xenops_task.task_handle) ~xs ~efivars domid =
     debug "Called Dm.restore_varstored";
-    start_varstored ~xs ~restore:true task domid
+    let path = efivars_resume_path domid in
+    debug "Writing EFI variables to %s" path;
+    Unixext.write_string_to_file path efivars;
+    debug "Wrote EFI variables to %s" path
 
 end (* Dm *)
 

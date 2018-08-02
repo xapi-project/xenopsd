@@ -340,6 +340,7 @@ let var_run_xen_path = "/var/run/xen"
 let qmp_libxl_path = (sprintf "%s/qmp-libxl-%d") var_run_xen_path
 let qmp_event_path = (sprintf "%s/qmp-event-%d") var_run_xen_path
 let efivars_init_path = (sprintf "%s/efi-vars-init-%d.dat") var_run_xen_path
+let efivars_resume_path = (sprintf "%s/efi-vars-resume-%d.dat") var_run_xen_path
 let efivars_save_path = (sprintf "%s/efi-vars-save-%d.dat") var_run_xen_path
 
 (* Where qemu writes its state and is signalled *)
