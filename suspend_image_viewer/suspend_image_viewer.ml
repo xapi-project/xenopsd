@@ -63,7 +63,10 @@ let parse_layout fd =
           Io.read fd (Io.int_of_int64_exn len) |> ignore;
           aux (h::acc)
         | End_of_image, _ -> return (h::acc)
-        | _ -> failwith "Unsupported"
+        | Libxl, _ -> failwith "Unsupported: libxl"
+        | Libxc_legacy, _ -> failwith "Unsupported: libxc-legacy"
+        | Demu, _ -> failwith "Unsupported: demu"
+        | Qemu_xen, _ -> failwith "Unsupported: qemu-xen"
       end
     in
     match aux [] with
