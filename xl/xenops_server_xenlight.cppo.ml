@@ -35,7 +35,7 @@ let disable_udev_path = "libxl/disable_udev"
 let store_domid = 0
 let console_domid = 0
 
-let suspend_save_signature = Bytes.of_string "XenSavedDomain\n"
+let suspend_save_signature = "XenSavedDomain\n"
 exception Restore_signature_mismatch
 
 exception Domain_stuck_in_dying_state of domid
@@ -554,17 +554,13 @@ module HOST = struct
           with Xenlight.Host.End_of_file ->
             []
         in
-        let raw = String.concat "" (List.rev (read_lines ())) |> Bytes.of_string in
+        let raw = String.concat "" (List.rev (read_lines ())) in
         Xenlight.Host.xen_console_read_finish ctx reader;
         (* There may be invalid XML characters in the buffer, so remove them *)
         let is_printable chr =
           let x = int_of_char chr in
           x=13 || x=10 || (x >= 0x20 && x <= 0x7e) in
-        for i = 0 to Bytes.length raw - 1 do
-          if not(is_printable (Bytes.get raw i))
-          then Bytes.set raw i ' '
-        done;
-        Bytes.unsafe_to_string raw
+        String.mapi (fun i c -> if not (is_printable c) then ' ' else c) raw
       )
 
   let get_total_memory_mib () =
@@ -2626,9 +2622,9 @@ let restore task progress_callback vm vbds vifs data vgpu_data extras =
       with_data ~xs task data false (fun fd ->
           let vbds = List.filter (fun vbd -> vbd.Vbd.mode = Vbd.ReadOnly) vbds in
           debug "Reading save signature";
-          let read_signature = Io.read fd (Bytes.length suspend_save_signature) in
+          let read_signature = Io.read fd (String.length suspend_save_signature) in
           if read_signature <> suspend_save_signature then begin
-            error "VM = %s; read invalid save file signature: \"%s\"" vm.Vm.id (Bytes.to_string read_signature);
+            error "VM = %s; read invalid save file signature: \"%s\"" vm.Vm.id read_signature;
             raise Restore_signature_mismatch
           end;
           build ~restore_fd:fd task vm vbds vifs [] [] extras false
