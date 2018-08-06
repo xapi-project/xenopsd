@@ -2748,9 +2748,7 @@ module Dm = struct
     in
     let args = Fe_argv.run args |> snd |> Fe_argv.argv in
     let pid = start_daemon ~path ~args ~name ~domid ~fds:[] () in
-    (* FIXME UEFI: hack, varstored itself should write this out to signal that it is ready *)
     let ready_path = Varstored.pid_path domid in
-    xs.Xs.write ready_path (Forkhelpers.getpid pid |> string_of_int);
     wait_path ~pid ~task ~name ~domid ~xs ~ready_path ~timeout:!Xenopsd.varstored_ready_timeout
       ~cancel:(Cancel_utils.Varstored domid) ();
     Forkhelpers.dontwaitpid pid
