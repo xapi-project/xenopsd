@@ -2744,7 +2744,7 @@ module Dm = struct
   (* the following functions depend on the functions above that use the qemu backend Q *)
 
   let start_varstored ~xs ?(nvram=[]) ?(restore=false) task domid =
-    debug "Preparing to start varstored for UEFI boot";
+    debug "Preparing to start varstored for UEFI boot (domid=%d)" domid;
     let path = !Xc_resources.varstored in
     let name = "varstored" in
     let vm_uuid = Xenops_helpers.uuid_of_domid ~xs domid |> Uuidm.to_string in
@@ -2769,8 +2769,8 @@ module Dm = struct
     let efivars_init = match List.assoc "EFI-variables" nvram with
       | efivars when not restore ->
         let efivars_init_path = efivars_init_path domid in
-        debug "Writing initial EFI variables to %s (length=%d)" efivars_init_path
-          (String.length efivars);
+        debug "Writing initial EFI variables to %s (domid=%d length=%d)" efivars_init_path
+          domid (String.length efivars);
         Unixext.write_string_to_file efivars_init_path efivars;
         Some efivars_init_path
       | ""  | _ -> None
