@@ -2940,16 +2940,16 @@ module Dm = struct
     start_vgpu ~xs task ~restore:true domid [vgpu] vcpus Profile.Qemu_trad
 
   let suspend_varstored (task: Xenops_task.task_handle) ~xs domid =
-    debug "Called Dm.suspend_varstored";
+    debug "Called Dm.suspend_varstored (domid=%d)" domid;
     Varstored.stop ~xs domid;
     Unixext.string_of_file (efivars_save_path domid)
 
   let restore_varstored (task: Xenops_task.task_handle) ~xs ~efivars domid =
-    debug "Called Dm.restore_varstored";
+    debug "Called Dm.restore_varstored (domid=%d)" domid;
     let path = efivars_resume_path domid in
-    debug "Writing EFI variables to %s" path;
+    debug "Writing EFI variables to %s (domid=%d)" path domid;
     Unixext.write_string_to_file path efivars;
-    debug "Wrote EFI variables to %s" path
+    debug "Wrote EFI variables to %s (domid=%d)" path domid
 
 end (* Dm *)
 

@@ -1042,9 +1042,9 @@ type suspend_flag = Live | Debug
               debug "Restored DEMU state";
               process_header fd res
             | Varstored, len ->
-              debug "Read varstored record header (length=%Ld)" len;
+              debug "Read varstored record header (domid=%d length=%Ld)" domid len;
               let efivars = Io.read fd (Io.int_of_int64_exn len) in
-              debug "Read varstored record contents";
+              debug "Read varstored record contents (domid=%d)" domid;
               Device.Dm.restore_varstored task ~xs ~efivars domid;
               process_header fd res
             | End_of_image, _ ->
@@ -1358,9 +1358,9 @@ type suspend_flag = Live | Debug
     let open Suspend_image in let open Suspend_image.M in
     let varstored_record = Device.Dm.suspend_varstored task ~xs domid in
     let varstored_rec_len = String.length varstored_record in
-    debug "Writing varstored record (length=%d)" varstored_rec_len;
+    debug "Writing varstored record (domid=%d length=%d)" domid varstored_rec_len;
     write_header main_fd (Varstored, Int64.of_int varstored_rec_len) >>= fun () ->
-    debug "Writing varstored record contents";
+    debug "Writing varstored record contents (domid=%d)" domid;
     Io.write main_fd varstored_record;
     return ()
 
