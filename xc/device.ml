@@ -1025,7 +1025,9 @@ module DaemonMgmt (D : DAEMONPIDPATH) = struct
         (* backward compatibility during update installation: only has xenstore pid *)
         let pid = xs.Xs.read (pid_path domid) in
         Some (int_of_string pid)
-    with _ -> None
+    with e ->
+      debug "Failed to read PID for %s (domid=%d): %s" D.name domid (Printexc.to_string e);
+      None
 
   let is_running ~xs domid =
     match pid ~xs domid with
