@@ -1687,8 +1687,8 @@ module Dm_Common = struct
   type info = {
     memory: int64;
     boot: string;
-    firmware: Xenops_types.Vm.firmware_type option;
-    nvram: (string * string) list;
+    firmware: Xenops_types.Vm.firmware_type;
+    nvram: Xenops_types.Nvram.t;
     serial: string option;
     monitor: string option;
     vcpus: int; (* vcpus max *)
@@ -2745,38 +2745,23 @@ module Dm = struct
 
   (* the following functions depend on the functions above that use the qemu backend Q *)
 
-  let start_varstored ~xs ?(nvram=[]) ?(restore=false) task domid =
+  let start_varstored ~xs ?(nvram=Xenops_types.Nvram.default_t) ?(restore=false) task domid =
+    let open Xenops_types in
     debug "Preparing to start varstored for UEFI boot (domid=%d)" domid;
     let path = !Xc_resources.varstored in
     let name = "varstored" in
     let vm_uuid = Xenops_helpers.uuid_of_domid ~xs domid |> Uuidm.to_string in
-    let reset_on_boot = match List.assoc "EFI-variables-on-boot" nvram with
-      | "persist" -> false
-      | "reset" -> true
-      | bad ->
-        sprintf "unsupported EFI-variables-on-boot %s, use 'persist' or 'reset'" bad
-        |> fun s -> Internal_error s
-        |> raise
-      | exception Not_found -> false
-    in
-    let default_backend = "xapidb" in
-    let backend = match List.assoc "EFI-variables-backend" nvram with
-      | x when x = default_backend -> x
-      | bad ->
-        sprintf "unsupported EFI-variables-backend %s, use 'xapidb'" bad
-        |> fun s -> Internal_error s
-        |> raise
-      | exception Not_found -> default_backend
-    in
-    let efivars_init = match List.assoc "EFI-variables" nvram with
+    let reset_on_boot = nvram.Nvram.efi_variables_on_boot = Nvram.Reset in
+    let backend = nvram.Nvram.efi_variables_backend in
+    let efivars_init = match nvram.Nvram.efi_variables with
+      | "" -> None
       | efivars when not restore ->
         let efivars_init_path = efivars_init_path domid in
         debug "Writing initial EFI variables to %s (domid=%d length=%d)" efivars_init_path
           domid (String.length efivars);
         Unixext.write_string_to_file efivars_init_path efivars;
         Some efivars_init_path
-      | ""  | _ -> None
-      | exception Not_found -> None
+      | _ -> None
     in
 
     let open Fe_argv in
@@ -2875,7 +2860,7 @@ module Dm = struct
     in
 
     (* start varstored if appropriate *)
-    if info.firmware = Some Uefi then
+    if info.firmware = Uefi then
       start_varstored ~restore:(action=Restore) ~xs ~nvram:info.nvram task domid;
 
     (* Execute qemu-dm-wrapper, forwarding stdout to the syslog, with the key "qemu-dm-<domid>" *)

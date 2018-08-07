@@ -997,7 +997,7 @@ module VM = struct
     let platformdata = vm.platformdata |> default "acpi_s3" "0" |> default "acpi_s4" "0" in
 
     let is_uefi = match ty with
-      | HVM { firmware = Some Uefi; _ } -> true
+      | HVM { firmware = Uefi; _ } -> true
       | _ -> false in
 
     {
@@ -1334,7 +1334,7 @@ module VM = struct
       ty = Some ty;
       VmExtra.qemu_vbds = qemu_vbds;
     } ->
-      let make ?(boot_order="cd") ?firmware ?(nvram=[]) ?(serial="pty") ?(monitor="null")
+      let make ?(boot_order="cd") ?(firmware=default_firmware) ?(nvram=Xenops_types.Nvram.default_t) ?(serial="pty") ?(monitor="null")
           ?(nics=[]) ?(disks=[]) ?(vgpus=[])
           ?(pci_emulations=[]) ?(usb=Device.Dm.Disabled)
           ?(parallel=None)
@@ -1417,8 +1417,8 @@ module VM = struct
           then Some (List.assoc "parallel" vm.Vm.platformdata)
           else None in
         Some (make ~video_mib:hvm_info.video_mib
-                ?firmware:hvm_info.firmware
-                ?nvram:hvm_info.nvram
+                ~firmware:hvm_info.firmware
+                ~nvram:hvm_info.nvram
                 ~video:hvm_info.video ~acpi:hvm_info.acpi
                 ?serial:hvm_info.serial ?keymap:hvm_info.keymap
                 ?vnc_ip:hvm_info.vnc_ip ~usb ~parallel
@@ -1773,7 +1773,7 @@ module VM = struct
          with_data ~xc ~xs task data true
            (fun fd ->
               let is_uefi = match vm.ty with
-                | HVM { firmware = Some Uefi; _ } -> true
+                | HVM { firmware = Uefi; _ } -> true
                 | _ -> false in
               let vm_str = Vm.sexp_of_t vm |> Sexplib.Sexp.to_string in
               let vgpu_fd =
