@@ -1067,7 +1067,7 @@ module Vgpu = DaemonMgmt(struct
 end)
 module Varstored = DaemonMgmt(struct
     let name = "varstored"
-    let use_pidfile = false
+    let use_pidfile = true
     let pid_path domid = sprintf "/local/domain/%d/varstored-pid" domid
   end)
 
@@ -2760,9 +2760,11 @@ module Dm = struct
                ; "--device"; string_of_int 15
                ; "--function"; string_of_int 0
                ; "--backend"; backend ] >>= fun () ->
-      on (not reset_on_boot) @@ Add.many @@ argf "uuid:%s" vm_uuid >>= fun () ->
+      (Varstored.pidfile_path domid |> function None -> return () | Some x ->
+         Add.many [ "--pidfile"; x ]) >>= fun () ->
+      Add.many @@ argf "uuid:%s" vm_uuid >>= fun () ->
+      on reset_on_boot @@ Add.arg "--nonpersistent" >>= fun () ->
       on restore @@ Add.arg "--resume" >>= fun () ->
-      Add.optional (argf "init:%s") efivars_init >>= fun () ->
       on restore @@ Add.many @@ argf "resume:%s" (efivars_resume_path domid) >>= fun () ->
       Add.many @@ argf "save:%s" (efivars_save_path domid)
     in
