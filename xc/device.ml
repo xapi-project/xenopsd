@@ -2745,7 +2745,7 @@ module Dm = struct
 
   (* the following functions depend on the functions above that use the qemu backend Q *)
 
-  let start_varstored ~xs ?(nvram=Xenops_types.Nvram.default_t) ?(restore=false) task domid =
+  let start_varstored ~xs ~nvram ?(restore=false) task domid =
     let open Xenops_types in
     debug "Preparing to start varstored for UEFI boot (domid=%d)" domid;
     let path = !Xc_resources.varstored in
