@@ -98,7 +98,6 @@ val demu_restore_path: (int -> 'a, 'b, 'a) format
 val var_run_xen_path: string
 val qmp_libxl_path: int -> string
 val qmp_event_path: int -> string
-val efivars_init_path: int -> string
 val efivars_resume_path: int -> string
 val efivars_save_path: int -> string
 

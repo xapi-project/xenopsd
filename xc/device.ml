@@ -1987,8 +1987,7 @@ module Dm_Common = struct
       List.iter (fun path ->
           debug "deleting %s" path;
           Unixext.unlink_safe path)
-        [ efivars_init_path domid
-        ; efivars_resume_path domid
+        [ efivars_resume_path domid
         ; efivars_save_path domid
         ]
     in
