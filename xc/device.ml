@@ -2565,15 +2565,29 @@ module Backend = struct
             | Dm_Common.Disk  -> "force-lba=on"
             | Dm_Common.Cdrom -> "force-lba=off"
           in
-          List.map (fun (index, file, media) -> [
-              "-drive"; String.concat "," ([
-                sprintf "file=%s" file;
-                "if=ide";
-                sprintf "index=%d" index;
-                sprintf "media=%s" (Dm_Common.string_of_media media);
-                lba_of_media media;
-              ] @ (format_of_media media file))
-            ])
+          List.map (fun (index, file, media) ->
+              let ide_kind = match media with
+                | Dm_Common.Disk -> "hd"
+                | Dm_Common.Cdrom -> "cd" in
+              let interface, device = match file with
+                | "" -> "ide", [] (* empty drive can't specify -device *)
+                | f -> "none", [
+                    "-device"; String.concat ","
+                      ([sprintf "ide-%s" ide_kind
+                       ; sprintf "drive=disk%d" index
+                       ])
+                  ]
+              in
+              [
+                "-drive"; String.concat "," ([
+                    sprintf "file=%s" file;
+                    sprintf "if=%s" interface;
+                    sprintf "id=disk%d" index;
+                    sprintf "index=%d" index;
+                    sprintf "media=%s" (Dm_Common.string_of_media media);
+                    lba_of_media media;
+                  ] @ (format_of_media media file))
+              ] @ device)
             info.Dm_Common.disks
           |> List.concat
         in
@@ -2596,8 +2610,17 @@ module Backend = struct
           let ifname          = sprintf "tap%d.%d" domid devid in
           let uuid, _  as tap = tap_open ifname in
           let args =
-            [ "-device"; sprintf "rtl8139,netdev=tapnet%d,mac=%s,addr=%x" devid mac (devid + 4)
-            ; "-netdev"; sprintf "tap,id=tapnet%d,fd=%s" devid uuid
+            [ "-device"; String.concat "," ([
+                  "rtl8139"
+                ; sprintf "netdev=tapnet%d" devid
+                ; sprintf "mac=%s" mac
+                ; sprintf "addr=%x" (devid + 4) ]
+                )
+            ; "-netdev"; String.concat "," ([
+                  "tap"
+                ; sprintf "id=tapnet%d" devid
+                ; sprintf "fd=%s" uuid
+                ] )
             ] in
           (tap::fds, args@argv) in
 
