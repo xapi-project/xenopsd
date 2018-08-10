@@ -2463,6 +2463,7 @@ module Backend = struct
       let qemu_args ~xs ~dm info restore domid =
         let common = Dm_Common.qemu_args ~xs ~dm info restore domid ~domid_for_vnc:true in
 
+        let is_uefi = match info.firmware with Uefi _ -> true | Bios -> false in
         let usb =
           match info.Dm_Common.usb with
           | Dm_Common.Disabled -> []
@@ -2533,11 +2534,49 @@ module Backend = struct
           with _ -> []
         in
 
+        let bootindex_map =
+          let add_disks kind =
+            let f (_, _, actual_kind) = actual_kind = kind in
+            info.Dm_Common.disks |> List.filter f |> List.map (fun d -> `Disk d)
+          in
+          Astring.String.fold_left (fun all order ->
+            all @ match order with
+            | 'c' -> add_disks Dm_Common.Disk
+            | 'd' -> add_disks Dm_Common.Cdrom
+            | 'n' -> [`Network 0]
+            | 'o' -> [`Network 1]
+            | 'p' -> [`Network 2]
+            | _ -> failwith "TODO: unsupported boot order"
+            ) [] info.Dm_Common.boot |> List.mapi (fun i v -> (v, i+1))
+        in
+
+        let device_of = function
+            | `Disk (index, _, Dm_Common.Disk) -> sprintf "disk (IDE slot=%d)" index
+            | `Disk (index, _, Dm_Common.Cdrom) -> sprintf "cdrom (IDE slot=%d)" index
+            | `Network i -> sprintf "network (NIC=%d)" i
+        in
+
+        bootindex_map |> List.map (fun (k, bootindex) ->
+            sprintf "%s -> %d" (device_of k) bootindex
+          ) |> String.concat "; " |>
+        D.debug "boot order %s mapped to bootindex: %s" info.Dm_Common.boot;
+
+        let bootindex i = [sprintf "bootindex=%d" i] in
+        let bootindex_of dev =
+          try
+            if is_uefi then List.assoc dev bootindex_map |> bootindex
+            else []
+          with Not_found ->
+            D.debug "Device %s not found in boot order, it will still be bootable though"
+              (device_of dev);
+            []
+        in
+
         let misc = List.concat
             [ [ "-xen-domid"; string_of_int domid
               ; "-m"; "size=" ^ (Int64.to_string (Int64.div info.Dm_Common.memory 1024L))
-              ; "-boot"; "order=" ^ info.Dm_Common.boot
               ]
+            ; (if is_uefi then [] else ["-boot"; "order=" ^ info.Dm_Common.boot])
             ; usb
             ; [ "-smp"; sprintf "%d,maxcpus=%d" info.Dm_Common.vcpus_current info.Dm_Common.vcpus]
             ; (serial_device |> function None -> [] | Some x -> [ "-serial"; x ])
@@ -2565,7 +2604,7 @@ module Backend = struct
             | Dm_Common.Disk  -> "force-lba=on"
             | Dm_Common.Cdrom -> "force-lba=off"
           in
-          List.map (fun (index, file, media) ->
+          List.map (fun ((index, file, media) as device) ->
               let ide_kind = match media with
                 | Dm_Common.Disk -> "hd"
                 | Dm_Common.Cdrom -> "cd" in
@@ -2575,7 +2614,7 @@ module Backend = struct
                     "-device"; String.concat ","
                       ([sprintf "ide-%s" ide_kind
                        ; sprintf "drive=disk%d" index
-                       ])
+                       ] @ (bootindex_of (`Disk device)))
                   ]
               in
               [
@@ -2615,6 +2654,7 @@ module Backend = struct
                 ; sprintf "netdev=tapnet%d" devid
                 ; sprintf "mac=%s" mac
                 ; sprintf "addr=%x" (devid + 4) ]
+                @ (bootindex_of (`Network devid))
                 )
             ; "-netdev"; String.concat "," ([
                   "tap"
