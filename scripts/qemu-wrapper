@@ -298,23 +298,23 @@ def main(argv):
     sys.stdout.flush()
     sys.stderr.flush()
 
-    qemu = subprocess.Popen(qemu_args, executable=qemu_dm, env=qemu_env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            preexec_fn=prepare_exec)
-
-    xenstore_write("/local/domain/%d/qemu-pid" % domid, "%d" % qemu.pid)
-    xenstore_write("/local/domain/%d/image/device-model-pid" % domid, "%d" % qemu.pid)
-
-    # Redirect output from QEMU to logger
-    os.dup2(qemu.stdout.fileno(), 0)
-    qemu.stdout.close()
-
     # Close all unneeded fds
     open_fds.extend([1, 2])
-    close_fds()
 
-    os.execvp('logger', ['logger', '-p', 'daemon.info', '-t',
-                         'qemu-dm-%d[%d]' % (domid, qemu.pid)])
+    pid = os.getpid()
+    logger = subprocess.Popen(['logger', '-p', 'daemon.info', '-t'
+                              , 'qemu-dm-%d[%d]' % (domid, pid)], executable='logger',
+                              stdin=subprocess.PIPE,
+                              preexec_fn=close_fds)
+    # Redirect stdin of logger to QEMU's stdout
+    os.dup2(logger.stdin.fileno(), 1)
+    os.dup2(logger.stdin.fileno(), 2)
+    logger.stdin.close()
+    prepare_exec()
+    xenstore_write("/local/domain/%d/qemu-pid" % domid, "%d" % pid)
+    xenstore_write("/local/domain/%d/image/device-model-pid" % domid, "%d" % pid)
+
+    os.execve(qemu_dm, qemu_args, qemu_env)
 
 if __name__ == '__main__':
     raise SystemExit(main(sys.argv))
