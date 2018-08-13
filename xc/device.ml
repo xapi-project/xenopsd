@@ -2890,10 +2890,10 @@ module Dm = struct
               end
           in
           if not (Qemu.SignalMask.has Qemu.signal_mask domid) then
-            match (Qemu.pid ~xs domid) with
-            | None -> (* after expected qemu stop or domain xs tree destroyed: this event arrived too late, nothing to do *)
+            match xs.Xs.read (Qemu.pid_path domid) with
+            | exception _ -> (* after expected qemu stop or domain xs tree destroyed: this event arrived too late, nothing to do *)
               debug "domid=%d qemu-pid=%d: already removed from xenstore during domain destroy" domid (getpid qemu_pid);
-            | Some _ ->
+            | _ ->
               (* before expected qemu stop: qemu-pid is available in domain xs tree: signal action to take *)
               xs.Xs.write (Qemu.pid_path_signal domid) crash_reason
         ))
