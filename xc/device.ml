@@ -53,10 +53,7 @@ module Profile = struct
   let of_string  = function
     | x when x = Name.qemu_trad            -> Qemu_trad
     | x when x = Name.qemu_upstream_compat -> Qemu_upstream_compat
-    | x when x = Name.qemu_upstream        ->
-       sprintf "unsupported device-model profile %s: use %s" x Name.qemu_upstream_compat
-       |> fun s -> Xenopsd_error (Internal_error s)
-       |> raise
+    | x when x = Name.qemu_upstream        -> Qemu_upstream
     | x -> debug "unknown device-model profile %s: defaulting to %s" x Name.qemu_upstream_compat;
       Qemu_upstream_compat
 
@@ -1989,6 +1986,44 @@ module Dm_Common = struct
     stop_varstored ();
     stop_qemu ()
 
+  let format_of_media (media:media) file =
+    match media, file with
+    | Disk, _   -> ["format=raw"]
+    | Cdrom, "" -> []
+    | Cdrom, _  -> ["format=raw"]
+
+  let lba_of_media (media:media) =
+    match media with
+    | Disk  -> "force-lba=on"
+    | Cdrom -> "force-lba=off"
+
+  let ide_device_of (index, file, media) =
+    [ "-drive"; String.concat "," ([
+          sprintf "file=%s" file;
+          "if=ide";
+          sprintf "index=%d" index;
+          sprintf "media=%s" (string_of_media media);
+          lba_of_media media;
+        ] @ (format_of_media media file))
+    ]
+
+  let nvme_device_of (index, file, media) =
+    let id = sprintf "disk%d" index in
+    [ "-drive"; String.concat "," (
+          [ sprintf "id=%s" id
+          ; "if=none"
+          ; sprintf "file=%s" file
+          ; sprintf "media=%s" (string_of_media media)
+          ; lba_of_media media
+          ] @ (format_of_media media file))
+    ; "-device"; String.concat ","
+        ([ "nvme"
+         ; sprintf "serial=%s" id
+         ; sprintf "drive=%s" id
+         ; sprintf "addr=%d" 7
+           (* 4 and 5 are NICs, and we can only have two, 6 is platform *)
+         ])
+    ]
 end (* End of module Dm_Common *)
 
 
@@ -2133,7 +2168,14 @@ module Backend = struct
   end (* Backend.Qemu_trad *)
 
   (** Implementation of the backend common signature for the qemu-upstream-compat backend *)
-  module Qemu_upstream_compat : Intf  = struct
+  module type Qemu_upstream_config = sig
+    val max_emulated_nics: int (** Should be <= the hardcoded maximum number of emulated NICs *)
+    val max_emulated_disks: int option (** None = no limit *)
+    val disk_interface : (int * string * Dm_Common.media) -> string list
+    val nic_type: string
+  end
+
+  module Make_qemu_upstream(Config: Qemu_upstream_config) : Intf  = struct
 
     (** Implementation of the Vbd functions that use the dispatcher for the qemu-upstream-compat backend *)
     module Vbd = struct
@@ -2485,7 +2527,7 @@ module Backend = struct
           List.concat in
         let global =
           mult
-            ["piix3-ide-xen"; "piix3-usb-uhci"; "rtl8139"]
+            ["piix3-ide-xen"; "piix3-usb-uhci"; Config.nic_type]
             ["subvendor_id=0x5853"; "subsystem_id=0x0001"]
         in
 
@@ -2549,36 +2591,31 @@ module Backend = struct
             ; xen_platform_device
             ] in
 
+        let disks_cdrom, disks_other =
+          info.Dm_Common.disks
+          |> List.partition (function (_, _, Dm_Common.Cdrom) -> true | (_, _, _) -> false)
+        in
+
+        let limit_emulated_disks disks =
+          let disks = List.stable_sort (fun (a, _, _) (b, _, _) -> compare a b) disks in
+          match Config.max_emulated_disks with
+          | Some limit when List.length disks > limit ->
+            debug "Limiting the number of emulated disks to %d" limit;
+            Xapi_stdext_std.Listext.List.take limit disks
+          | _ -> disks
+        in
+
         let disks' =
-          let format_of_media (media:Dm_Common.media) file =
-            match media, file with
-            | Dm_Common.Disk, _   -> ["format=raw"]
-            | Dm_Common.Cdrom, "" -> []
-            | Dm_Common.Cdrom, _  -> ["format=raw"]
-          in
-          let lba_of_media (media:Dm_Common.media) =
-            match media with
-            | Dm_Common.Disk  -> "force-lba=on"
-            | Dm_Common.Cdrom -> "force-lba=off"
-          in
-          List.map (fun (index, file, media) -> [
-              "-drive"; String.concat "," ([
-                sprintf "file=%s" file;
-                "if=ide";
-                sprintf "index=%d" index;
-                sprintf "media=%s" (Dm_Common.string_of_media media);
-                lba_of_media media;
-              ] @ (format_of_media media file))
-            ])
-            info.Dm_Common.disks
-          |> List.concat
+          [ List.map Dm_Common.ide_device_of disks_cdrom
+          ; disks_other |> limit_emulated_disks |> List.map Config.disk_interface ]
+          |> List.concat |> List.concat
         in
 
         (* Sort the VIF devices by devid *)
         let nics = List.stable_sort
           (fun (_,_,a) (_,_,b) -> compare a b) info.Dm_Common.nics in
         let nic_count = List.length nics in
-        let nic_max   = Dm_Common.max_emulated_nics in
+        let nic_max   = Config.max_emulated_nics in
         if nic_count > nic_max then
           debug "Limiting the number of emulated NICs to %d" nic_max;
         (* Take the first 'max_emulated_nics' elements from the list. *)
@@ -2592,7 +2629,7 @@ module Backend = struct
           let ifname          = sprintf "tap%d.%d" domid devid in
           let uuid, _  as tap = tap_open ifname in
           let args =
-            [ "-device"; sprintf "rtl8139,netdev=tapnet%d,mac=%s,addr=%x" devid mac (devid + 4)
+            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" Config.nic_type devid mac (devid + 4)
             ; "-netdev"; sprintf "tap,id=tapnet%d,fd=%s" devid uuid
             ] in
           (tap::fds, args@argv) in
@@ -2631,6 +2668,7 @@ module Backend = struct
             |> first_gap 4
         in
 
+
         (* Go over all nics and collect file descriptors and command
          * line arguments. Add these to the already existing command
          * line arguments in common
@@ -2656,9 +2694,22 @@ module Backend = struct
   end (* Backend.Qemu_upstream *)
 
   (** Implementation of the backend common signature for the qemu-upstream backend *)
-  module Qemu_upstream  = Qemu_upstream_compat
+  module Qemu_upstream  = Make_qemu_upstream(struct
+      let max_emulated_nics = 2
+      let max_emulated_disks = Some 1
+      let disk_interface = Dm_Common.nvme_device_of
+      let nic_type = "e1000"
+    end)
+
+  module Qemu_upstream_compat  = Make_qemu_upstream(struct
+      let max_emulated_nics = 8
+      let max_emulated_disks = None
+      let disk_interface = Dm_Common.ide_device_of
+      let nic_type = "rtl8139"
+    end)
   (** Until the stage 4 defined in the qemu upstream design is implemented, qemu_upstream behaves as qemu_upstream_compat *)
 
+  (* TODO: uefi should default to Qemu_upstream *)
   let of_profile p = match p with
     | Profile.Qemu_trad            -> (module Qemu_trad            : Intf)
     | Profile.Qemu_upstream_compat -> (module Qemu_upstream_compat : Intf)
