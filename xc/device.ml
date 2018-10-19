@@ -2549,13 +2549,7 @@ module Backend = struct
                   List.map (fun x -> ["-qmp"; sprintf "unix:/var/run/xen/qmp-%s-%d,server,nowait" x domid]) |>
                   List.concat in
 
-        let has_platform_device =
-          try
-            int_of_string (xs.Xs.read (sprintf "/local/domain/%d/vm-data/disable_pf" domid)) <> 1
-          with _ -> true
-        in
         let xen_platform_device =
-          if has_platform_device then begin
             let device_id =
               try xs.Xs.read (sprintf "/local/domain/%d/platform/device_id" domid)
               with _ -> "0001"
@@ -2570,7 +2564,6 @@ module Backend = struct
                 ; sprintf"subsystem_id=0x%s" device_id
                 ]
             ]
-          end else []
         in
 
         let pv_device addr =
@@ -2676,8 +2669,8 @@ module Backend = struct
         in
 
         let pv_device_addr =
-          if has_nvidia_vgpu            then 2 else
-          if not @@ has_platform_device then 3 else
+          if has_nvidia_vgpu then 2
+          else
             nics
             |> List.map (fun (_, _, devid) -> devid+4)
             |> first_gap 4
