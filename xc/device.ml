@@ -2522,12 +2522,26 @@ module Backend = struct
           with _ -> info.Dm_Common.serial
         in
 
+        let nic_type =
+          try xs.Xs.read (sprintf "/local/domain/%d/platform/nic_type" domid)
+          with _ -> Config.nic_type
+        in
+
+        let disk_interface =
+          match xs.Xs.read (sprintf "/local/domain/%d/platform/disk_type" domid) with
+          | "ide" -> Dm_Common.ide_device_of
+          | "nvme" -> Dm_Common.nvme_device_of
+          | unknown ->
+            raise (Ioemu_failed (sprintf "domid %d" domid, sprintf "Unknown platform:disk_type=%s" unknown))
+          | exception _ -> Config.disk_interface
+        in
+
         let mult xs ys =
           List.map (fun x -> List.map (fun y -> x^"."^y) ys) xs |>
           List.concat in
         let global =
           mult
-            ["piix3-ide-xen"; "piix3-usb-uhci"; Config.nic_type]
+            ["piix3-ide-xen"; "piix3-usb-uhci"; nic_type]
             ["subvendor_id=0x5853"; "subsystem_id=0x0001"]
         in
 
@@ -2608,7 +2622,7 @@ module Backend = struct
 
         let disks' =
           [ List.map Dm_Common.ide_device_of disks_cdrom
-          ; disks_other |> limit_emulated_disks |> List.map Config.disk_interface ]
+          ; disks_other |> limit_emulated_disks |> List.map disk_interface ]
           |> List.concat |> List.concat
         in
 
@@ -2630,7 +2644,7 @@ module Backend = struct
           let ifname          = sprintf "tap%d.%d" domid devid in
           let uuid, _  as tap = tap_open ifname in
           let args =
-            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" Config.nic_type devid mac (devid + 4)
+            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" nic_type devid mac (devid + 4)
             ; "-netdev"; sprintf "tap,id=tapnet%d,fd=%s" devid uuid
             ] in
           (tap::fds, args@argv) in
