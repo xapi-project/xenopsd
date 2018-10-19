@@ -119,7 +119,7 @@ type build_info = {
 
 type domid = int
 
-let allowed_xsdata_prefixes = [ "vm-data"; "FIST" ]
+let allowed_xsdata_prefixes = [ "FIST" ]
 
 let filtered_xsdata =
   (* disallowed by default; allowed only if it has one of a set of prefixes *)
@@ -307,7 +307,6 @@ let make ~xc ~xs vm_info vcpus domain_config uuid =
               "xenserver/attr";
               "data";
               "messages";
-              "vm-data";
               "hvmloader";
               "rrd";
             ])
