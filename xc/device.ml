@@ -2585,6 +2585,7 @@ module Backend = struct
             ; [ "-S"]
             ; [ "-global"; "PIIX4_PM.revision_id=0x1"]
             ; [ "-global"; "ide-hd.ver=0.10.2"]
+            ; [ "-global"; "e1000.autonegotiation=on"]
             ; (global |> List.map (fun x -> ["-global"; x]) |> List.concat)
             ; (info.Dm_Common.parallel |> function None -> [ "-parallel"; "null"] | Some x -> [ "-parallel"; x])
             ; qmp
