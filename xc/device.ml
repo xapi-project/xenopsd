@@ -2171,8 +2171,8 @@ module Backend = struct
   module type Qemu_upstream_config = sig
     val max_emulated_nics: int (** Should be <= the hardcoded maximum number of emulated NICs *)
     val max_emulated_disks: int option (** None = no limit *)
-    val disk_interface : (int * string * Dm_Common.media) -> string list
     val nic_type: string
+    val supports_nvme: bool
   end
 
   module Make_qemu_upstream(Config: Qemu_upstream_config) : Intf  = struct
@@ -2530,10 +2530,12 @@ module Backend = struct
         let disk_interface =
           match xs.Xs.read (sprintf "/local/domain/%d/platform/disk_type" domid) with
           | "ide" -> Dm_Common.ide_device_of
-          | "nvme" -> Dm_Common.nvme_device_of
+          | "nvme" when Config.supports_nvme -> Dm_Common.nvme_device_of (* nvme won't work with Bios *)
           | unknown ->
             raise (Ioemu_failed (sprintf "domid %d" domid, sprintf "Unknown platform:disk_type=%s" unknown))
-          | exception _ -> Config.disk_interface
+          | exception _ ->
+            if Config.supports_nvme then Dm_Common.nvme_device_of
+            else Dm_Common.ide_device_of
         in
 
         let mult xs ys =
@@ -2705,15 +2707,15 @@ module Backend = struct
   module Qemu_upstream  = Make_qemu_upstream(struct
       let max_emulated_nics = 2
       let max_emulated_disks = Some 1
-      let disk_interface = Dm_Common.nvme_device_of
       let nic_type = "e1000"
+      let supports_nvme = true
     end)
 
   module Qemu_upstream_compat  = Make_qemu_upstream(struct
       let max_emulated_nics = 8
       let max_emulated_disks = None
-      let disk_interface = Dm_Common.ide_device_of
       let nic_type = "rtl8139"
+      let supports_nvme = false
     end)
   (** Until the stage 4 defined in the qemu upstream design is implemented, qemu_upstream behaves as qemu_upstream_compat *)
 
