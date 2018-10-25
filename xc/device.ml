@@ -2174,6 +2174,8 @@ module Backend = struct
     val nic_type: string
     val supports_nvme: bool
     val name: string
+    val pv_device_addr : Dm_Common.info -> nics:(string * string * int) list -> int
+    val nic_addr : devid:int -> index:int -> int
   end
 
   module Config_qemu_upstream_compat = struct
@@ -2182,6 +2184,42 @@ module Backend = struct
     let nic_type = "rtl8139"
     let supports_nvme = false
     let name = "qemu-upstream-compat"
+
+    let nic_base_addr = 4
+    let pv_device_addr info ~nics =
+      (** [first_gap n xs] expects an ascending list of integers [xs].
+       * It looks for a gap in sequence [xs] and returns the first it
+       * finds at position n or higher:
+       * first_gap 4 []      = 4
+       * first_gap 4 [5;6]   = 4
+       * first_gap 4 [1;3]   = 4
+       * first_gap 4 [5;6;8] = 4
+       * first_gap 4 [4;5;7] = 6
+       * first_gap 4 [4;5;6] = 7
+       *)
+      let rec first_gap n = function
+        | []             -> n
+        | x::xs when x<n -> first_gap n xs
+        | x::xs when x=n -> first_gap (n+1) xs
+        | x::xs          -> n
+      in
+
+      let has_nvidia_vgpu =
+        let open Xenops_interface.Vgpu in
+        let open Dm_Common in
+        match info.disp with
+        | VNC(Vgpu [{implementation = Nvidia _}],_,_,_,_) -> true
+        | SDL(Vgpu [{implementation = Nvidia _}],_)       -> true
+        | _                                               -> false
+      in
+
+      if has_nvidia_vgpu then 2
+      else
+        nics
+        |> List.map (fun (_, _, devid) -> devid + nic_base_addr)
+        |> first_gap nic_base_addr
+
+      let nic_addr ~devid ~index = devid + nic_base_addr
   end
 
   module Config_qemu_upstream = struct
@@ -2190,6 +2228,19 @@ module Backend = struct
     let nic_type = "e1000"
     let supports_nvme = true
     let name = "qemu-upstream"
+
+    (*
+       0: i440FX
+       1: PIIX3
+       2: VGA or empty
+       3: Xen platform or empty
+       4 - 5: NIC (limited to first 2)
+       6: Xen PV
+       7: NVME
+       8+: vGPU and other pass-through devices
+     *)
+    let nic_addr ~devid ~index = 4 + index
+    let pv_device_addr _ ~nics = 6
   end
 
   module Make_qemu_upstream(DefaultConfig: Qemu_upstream_config) : Intf  = struct
@@ -2660,62 +2711,29 @@ module Backend = struct
          * for a nic to the existing fds and arguments (fds, argv)
         *)
         let none = ["-net"; "none"] in
-        let add_nic (fds, argv) (mac, bridge, devid) =
+        let add_nic (index, fds, argv) (mac, bridge, devid) =
           let ifname          = sprintf "tap%d.%d" domid devid in
           let uuid, _  as tap = tap_open ifname in
           let args =
-            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" nic_type devid mac (devid + 4)
+            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" nic_type devid mac (Config.nic_addr ~devid ~index)
             ; "-netdev"; sprintf "tap,id=tapnet%d,fd=%s" devid uuid
             ] in
-          (tap::fds, args@argv) in
+          (index+1, tap::fds, args@argv) in
 
-        (** [first_gap n xs] expects an ascending list of integers [xs].
-         * It looks for a gap in sequence [xs] and returns the first it
-         * finds at position n or higher:
-         * first_gap 4 []      = 4
-         * first_gap 4 [5;6]   = 4
-         * first_gap 4 [1;3]   = 4
-         * first_gap 4 [5;6;8] = 4
-         * first_gap 4 [4;5;7] = 6
-         * first_gap 4 [4;5;6] = 7
-         *)
-        let rec first_gap n = function
-          | []             -> n
-          | x::xs when x<n -> first_gap n xs
-          | x::xs when x=n -> first_gap (n+1) xs
-          | x::xs          -> n
-        in
-
-        let has_nvidia_vgpu =
-          let open Xenops_interface.Vgpu in
-          let open Dm_Common in
-          match info.disp with
-          | VNC(Vgpu [{implementation = Nvidia _}],_,_,_,_) -> true
-          | SDL(Vgpu [{implementation = Nvidia _}],_)       -> true
-          | _                                               -> false
-        in
-
-        let pv_device_addr =
-          if has_nvidia_vgpu then 2
-          else
-            nics
-            |> List.map (fun (_, _, devid) -> devid+4)
-            |> first_gap 4
-        in
-
+        let pv_device_addr = Config.pv_device_addr info ~nics in
 
         (* Go over all nics and collect file descriptors and command
          * line arguments. Add these to the already existing command
          * line arguments in common
         *)
-        List.fold_left add_nic ([],[]) nics
+        List.fold_left add_nic (0, [],[]) nics
         |> function
-        |  _, []    ->
+        |  _, _, []    ->
           Dm_Common.
             { argv   = common.argv   @ misc @ disks' @ pv_device pv_device_addr @ none
             ; fd_map = common.fd_map
             }
-        | fds, argv ->
+        | _, fds, argv ->
           Dm_Common.
             { argv   = common.argv   @ misc @ disks' @ pv_device pv_device_addr @ argv
             ; fd_map = common.fd_map @ fds
