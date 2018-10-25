@@ -2173,9 +2173,26 @@ module Backend = struct
     val max_emulated_disks: int option (** None = no limit *)
     val nic_type: string
     val supports_nvme: bool
+    val name: string
   end
 
-  module Make_qemu_upstream(Config: Qemu_upstream_config) : Intf  = struct
+  module Config_qemu_upstream_compat = struct
+    let max_emulated_nics = 8
+    let max_emulated_disks = None
+    let nic_type = "rtl8139"
+    let supports_nvme = false
+    let name = "qemu-upstream-compat"
+  end
+
+  module Config_qemu_upstream = struct
+    let max_emulated_nics = 2
+    let max_emulated_disks = Some 1
+    let nic_type = "e1000"
+    let supports_nvme = true
+    let name = "qemu-upstream"
+  end
+
+  module Make_qemu_upstream(DefaultConfig: Qemu_upstream_config) : Intf  = struct
 
     (** Implementation of the Vbd functions that use the dispatcher for the qemu-upstream-compat backend *)
     module Vbd = struct
@@ -2499,6 +2516,12 @@ module Backend = struct
         (uuid, fd)
 
       let qemu_args ~xs ~dm info restore domid =
+        let module Config =  (val match info.Dm_Common.firmware with
+          | Uefi _ -> (module Config_qemu_upstream)
+          | Bios -> (module DefaultConfig)
+          : Qemu_upstream_config)
+        in
+        debug "Using device-model=%s for domid=%d" Config.name domid;
         let common = Dm_Common.qemu_args ~xs ~dm info restore domid ~domid_for_vnc:true in
 
         let usb =
@@ -2704,19 +2727,8 @@ module Backend = struct
   end (* Backend.Qemu_upstream *)
 
   (** Implementation of the backend common signature for the qemu-upstream backend *)
-  module Qemu_upstream  = Make_qemu_upstream(struct
-      let max_emulated_nics = 2
-      let max_emulated_disks = Some 1
-      let nic_type = "e1000"
-      let supports_nvme = true
-    end)
-
-  module Qemu_upstream_compat  = Make_qemu_upstream(struct
-      let max_emulated_nics = 8
-      let max_emulated_disks = None
-      let nic_type = "rtl8139"
-      let supports_nvme = false
-    end)
+  module Qemu_upstream  = Make_qemu_upstream(Config_qemu_upstream)
+  module Qemu_upstream_compat  = Make_qemu_upstream(Config_qemu_upstream_compat)
   (** Until the stage 4 defined in the qemu upstream design is implemented, qemu_upstream behaves as qemu_upstream_compat *)
 
   (* TODO: uefi should default to Qemu_upstream *)
