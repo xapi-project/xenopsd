@@ -152,10 +152,10 @@ module Generic = struct
       raise e
 
   let safe_rm ~xs path =
-    try 
+    try
       debug "xenstore-rm %s" path;
       xs.Xs.rm path
-    with _ -> debug "Failed to xenstore-rm %s; continuing" path 
+    with _ -> debug "Failed to xenstore-rm %s; continuing" path
 
   (* Helper function to delete the frontend, backend and error trees for a device.
      This must only be done after synchronising with the hotplug scripts.
@@ -182,7 +182,7 @@ module Generic = struct
     with _ -> false
 
   (** Checks whether the supplied device still exists (ie hasn't been deleted) *)
-  let exists ~xs (x: device) = 
+  let exists ~xs (x: device) =
     let backend_stub = backend_path_of_device ~xs x in
     try
       ignore_string(xs.Xs.read backend_stub);
@@ -285,7 +285,7 @@ module Generic = struct
    When the watch fires, call a predicate function and look for an error node.
    If an error node appears, throw Device_error. If the predicate returns true then
    return unit. If the timeout expires throw Device_disconnect_timeout. *)
-let wait_for_error_or ~xs ?(timeout=Hotplug.hotplug_timeout) doc predicate otherpath domid kind devid = 
+let wait_for_error_or ~xs ?(timeout=Hotplug.hotplug_timeout) doc predicate otherpath domid kind devid =
 	let doc' = Printf.sprintf "%s (timeout = %f; %s)" doc timeout (print_device domid kind devid) in
   	let errorpath = error_node domid kind devid in
 	debug "Device.wait_for_error_or %s (watching [ %s; %s ])" doc' otherpath errorpath;
@@ -500,7 +500,7 @@ module Vbd_Common = struct
     if !Xenopsd.run_hotplug_scripts
     then Hotplug.run_hotplug_script x [ "remove" ];
 
-    (* As for add above, if the frontend is in dom0, we can wait for the frontend 
+    (* As for add above, if the frontend is in dom0, we can wait for the frontend
        	 * to unplug as well as the backend. CA-13506 *)
     if x.frontend.domid = 0 then Hotplug.wait_for_frontend_unplug task ~xs x
 
@@ -539,7 +539,7 @@ module Vbd_Common = struct
       | None ->
         make (free_device ~xs hvm domid) in
     let devid = to_xenstore_key device_number in
-    let device = 
+    let device =
       let backend = { domid = x.backend_domid; kind = x.kind; devid = devid }
       in  device_of_backend backend domid
     in
@@ -674,7 +674,7 @@ end
 
 module Vif = struct
 
-  let add ~xs ~devid ~mac ?mtu ?(rate=None) ?(backend_domid=0) ?(other_config=[]) 
+  let add ~xs ~devid ~mac ?mtu ?(rate=None) ?(backend_domid=0) ?(other_config=[])
       ~netty ~carrier ?(protocol=Protocol_Native) ?(extra_private_keys=[]) ?(extra_xenserver_keys=[]) (task: Xenops_task.task_handle) domid =
     debug "Device.Vif.add domid=%d devid=%d mac=%s carrier=%b rate=%s other_config=[%s] extra_private_keys=[%s] extra_xenserver_keys=[%s]" domid devid mac carrier
       (match rate with None -> "none" | Some (a, b) -> sprintf "(%Ld,%Ld)" a b)
@@ -763,7 +763,7 @@ module Vif = struct
 
   let hard_shutdown = Generic.hard_shutdown
 
-  let set_carrier ~xs (x: device) carrier = 
+  let set_carrier ~xs (x: device) carrier =
     debug "Device.Vif.set_carrier %s <- %b" (string_of_device x) carrier;
     let disconnect_path = disconnect_path_of_device ~xs x in
     xs.Xs.write disconnect_path (if carrier then "0" else "1")
@@ -791,13 +791,13 @@ end
 (** Network SR-IOV VFs:                                                                 *)
 module NetSriovVf = struct
 
-  let add  ~xs ~devid ~mac ?mtu ?(rate=None) ?(backend_domid=0) ?(other_config=[]) 
+  let add  ~xs ~devid ~mac ?mtu ?(rate=None) ?(backend_domid=0) ?(other_config=[])
       ~pci ~vlan ~carrier ?(extra_private_keys=[]) ?(extra_xenserver_keys=[])
       (task: Xenops_task.task_handle) domid =
     let vlan_str = match vlan with None -> "none" | Some vlan -> sprintf "%Ld" vlan in
     let rate_str = match rate with None -> "none" | Some (a, b) -> sprintf "(%Ld,%Ld)" a b in
     debug "Device.NetSriovVf.add domid=%d devid=%d pci=%s vlan=%s mac=%s carrier=%b \
-           rate=%s other_config=[%s] extra_private_keys=[%s] extra_xenserver_keys=[%s]" 
+           rate=%s other_config=[%s] extra_private_keys=[%s] extra_xenserver_keys=[%s]"
       domid devid (Xenops_interface.Pci.string_of_address pci)  vlan_str mac carrier rate_str
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) other_config))
       (String.concat "; " (List.map (fun (k, v) -> k ^ "=" ^ v) extra_private_keys))
@@ -925,7 +925,7 @@ module PV_Vnc = struct
   let get_statefile ~xs domid =
     match pid ~xs domid with
     | None -> None
-    | Some pid -> 
+    | Some pid ->
       let filename = vncterm_statefile pid in
       if Sys.file_exists filename then
         Some filename
@@ -934,7 +934,7 @@ module PV_Vnc = struct
 
   let save ~xs domid =
     match pid ~xs domid with
-    | Some pid -> 
+    | Some pid ->
       Unix.kill pid Sys.sigusr1;
       let filename = vncterm_statefile pid in
       let delay = 10. in
@@ -1364,10 +1364,10 @@ module PCI = struct
   let device_model_state_path xs be_domid fe_domid =
     Printf.sprintf "%s/device-model/%d/state" (xs.Xs.getdomainpath be_domid) fe_domid
 
-  let signal_device_model ~xs domid cmd parameter = 
+  let signal_device_model ~xs domid cmd parameter =
     debug "Device.Pci.signal_device_model domid=%d cmd=%s param=%s" domid cmd parameter;
     let be_domid = 0 in (* XXX: assume device model is in domain 0 *)
-    let be_path = xs.Xs.getdomainpath be_domid in 
+    let be_path = xs.Xs.getdomainpath be_domid in
     (* Currently responses go in this global place. Blank it to prevent request/response/request confusion *)
     xs.Xs.rm (device_model_state_path xs be_domid domid);
 
@@ -1393,7 +1393,7 @@ module PCI = struct
     end
 
   (* Return a list of PCI devices *)
-  let list ~xs domid = 
+  let list ~xs domid =
     (* replace the sort index with the default '0' -- XXX must figure out whether this matters to anyone *)
     List.map (fun (_, y) -> (0, y)) (read_pcidir ~xs domid)
 
@@ -1785,7 +1785,7 @@ module Dm_Common = struct
     in
     let disp_options, wait_for_port =
       match info.disp with
-      | NONE -> 
+      | NONE ->
         ([], false)
       | SDL (opts, x11name) ->
         ([], false)
@@ -2142,7 +2142,7 @@ module Backend = struct
         devid
         |> Device_number.of_xenstore_key
         |> Device_number.spec
-        |> function 
+        |> function
            | Ide, 0, _ -> "ide0-cd0"
            | Ide, 1, _ -> "ide0-cd1"
            | Ide, 2, _ -> "ide1-cd0"
@@ -2273,7 +2273,7 @@ module Backend = struct
 
         let remove domid =
           Lookup.channel_of domid >>= fun c ->
-          try 
+          try
             finally
               (fun () ->
                  Lookup.remove c domid;
@@ -2349,7 +2349,7 @@ module Backend = struct
               Monitor.wait m |> Monitor.with_event m (fun fd is_flag_in ->
                   Lookup.domid_of fd >>= fun domid ->
                   Lookup.channel_of domid >>= fun c ->
-                  let qmp = Qmp_protocol.to_fd c in  
+                  let qmp = Qmp_protocol.to_fd c in
                   if is_flag_in then
                     match Readln.read qmp with
                     | Readln.Ok msgs  -> List.iter (process domid) msgs
@@ -2953,7 +2953,7 @@ let get_vnc_port ~xs ~dm domid =
   then Dm.get_vnc_port ~xs ~dm domid
   else PV_Vnc.get_vnc_port ~xs domid
 
-let get_tc_port ~xs domid = 
+let get_tc_port ~xs domid =
   (* Check whether a qemu exists for this domain *)
   let qemu_exists = Qemu.is_running ~xs domid in
   if qemu_exists
