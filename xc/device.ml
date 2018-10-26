@@ -2573,11 +2573,7 @@ module Backend = struct
         (uuid, fd)
 
       let qemu_args ~xs ~dm info restore domid =
-        let module Config =  (val match info.Dm_Common.firmware with
-          | Uefi _ -> (module Config_qemu_upstream_uefi)
-          | Bios -> (module DefaultConfig)
-          : Qemu_upstream_config)
-        in
+        let module Config = DefaultConfig in
         debug "Using device-model=%s for domid=%d" Config.name domid;
         let common = Dm_Common.qemu_args ~xs ~dm info restore domid ~domid_for_vnc:true in
 
