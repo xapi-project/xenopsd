@@ -34,26 +34,30 @@ open D
 
 (** Definition of available qemu profiles, used by the qemu backend implementations *)
 module Profile = struct
-  type t = Qemu_trad | Qemu_upstream_compat | Qemu_upstream [@@deriving rpcty]
+  type t = Qemu_trad | Qemu_upstream_compat | Qemu_upstream | Qemu_upstream_uefi [@@deriving rpcty]
   let fallback = Qemu_trad
   let all = [ Qemu_trad; Qemu_upstream_compat; Qemu_upstream ]
   module Name = struct
     let qemu_trad            = "qemu-trad"
     let qemu_upstream_compat = "qemu-upstream-compat"
     let qemu_upstream        = "qemu-upstream"
+    let qemu_upstream_uefi   = "qemu-upstream-uefi"
   end
   let wrapper_of = function
     | Qemu_trad            -> !Resources.qemu_dm_wrapper
     | Qemu_upstream_compat -> !Resources.upstream_compat_qemu_dm_wrapper
     | Qemu_upstream        -> !Resources.upstream_compat_qemu_dm_wrapper
+    | Qemu_upstream_uefi   -> !Resources.upstream_compat_qemu_dm_wrapper
   let string_of  = function
     | Qemu_trad              -> Name.qemu_trad
     | Qemu_upstream_compat   -> Name.qemu_upstream_compat
     | Qemu_upstream          -> Name.qemu_upstream
+    | Qemu_upstream_uefi     -> Name.qemu_upstream
   let of_string  = function
     | x when x = Name.qemu_trad            -> Qemu_trad
     | x when x = Name.qemu_upstream_compat -> Qemu_upstream_compat
     | x when x = Name.qemu_upstream        -> Qemu_upstream
+    | x when x = Name.qemu_upstream_uefi   -> Qemu_upstream_uefi
     | x -> debug "unknown device-model profile %s: defaulting to %s" x Name.qemu_upstream_compat;
       Qemu_upstream_compat
 
@@ -2172,7 +2176,7 @@ module Backend = struct
     val max_emulated_nics: int (** Should be <= the hardcoded maximum number of emulated NICs *)
     val max_emulated_disks: int option (** None = no limit *)
     val nic_type: string
-    val supports_nvme: bool
+    val supports_nvme: Dm_Common.info -> bool
     val name: string
     val pv_device_addr : Dm_Common.info -> nics:(string * string * int) list -> int
     val nic_addr : devid:int -> index:int -> int
@@ -2182,7 +2186,7 @@ module Backend = struct
     let max_emulated_nics = 8
     let max_emulated_disks = None
     let nic_type = "rtl8139"
-    let supports_nvme = false
+    let supports_nvme _ = false
     let name = "qemu-upstream-compat"
 
     let nic_base_addr = 4
@@ -2222,11 +2226,13 @@ module Backend = struct
       let nic_addr ~devid ~index = devid + nic_base_addr
   end
 
-  module Config_qemu_upstream = struct
+  module Config_qemu_upstream_uefi = struct
     let max_emulated_nics = 2
     let max_emulated_disks = Some 1
     let nic_type = "e1000"
-    let supports_nvme = true
+    let supports_nvme info = match info.Dm_Common.firmware with
+     | Bios -> false
+     | Uefi _ -> true
     let name = "qemu-upstream"
 
     (*
@@ -2568,7 +2574,7 @@ module Backend = struct
 
       let qemu_args ~xs ~dm info restore domid =
         let module Config =  (val match info.Dm_Common.firmware with
-          | Uefi _ -> (module Config_qemu_upstream)
+          | Uefi _ -> (module Config_qemu_upstream_uefi)
           | Bios -> (module DefaultConfig)
           : Qemu_upstream_config)
         in
@@ -2604,11 +2610,12 @@ module Backend = struct
         let disk_interface =
           match xs.Xs.read (sprintf "/local/domain/%d/platform/disk_type" domid) with
           | "ide" -> Dm_Common.ide_device_of
-          | "nvme" when Config.supports_nvme -> Dm_Common.nvme_device_of (* nvme won't work with Bios *)
+          | "nvme" when Config.supports_nvme info -> Dm_Common.nvme_device_of (* nvme won't work with Bios *)
           | unknown ->
             raise (Ioemu_failed (sprintf "domid %d" domid, sprintf "Unknown platform:disk_type=%s" unknown))
           | exception _ ->
-            if Config.supports_nvme then Dm_Common.nvme_device_of
+            (* no override, use default *)
+            if Config.supports_nvme info then Dm_Common.nvme_device_of
             else Dm_Common.ide_device_of
         in
 
@@ -2747,15 +2754,17 @@ module Backend = struct
   end (* Backend.Qemu_upstream *)
 
   (** Implementation of the backend common signature for the qemu-upstream backend *)
-  module Qemu_upstream  = Make_qemu_upstream(Config_qemu_upstream)
   module Qemu_upstream_compat  = Make_qemu_upstream(Config_qemu_upstream_compat)
+  module Qemu_upstream  = Qemu_upstream_compat
   (** Until the stage 4 defined in the qemu upstream design is implemented, qemu_upstream behaves as qemu_upstream_compat *)
 
-  (* TODO: uefi should default to Qemu_upstream *)
+  module Qemu_upstream_uefi  = Make_qemu_upstream(Config_qemu_upstream_uefi)
+
   let of_profile p = match p with
     | Profile.Qemu_trad            -> (module Qemu_trad            : Intf)
     | Profile.Qemu_upstream_compat -> (module Qemu_upstream_compat : Intf)
     | Profile.Qemu_upstream        -> (module Qemu_upstream        : Intf)
+    | Profile.Qemu_upstream_uefi   -> (module Qemu_upstream_uefi  : Intf)
 
   let init() =
     Qemu_upstream.Dm.Event.init()
