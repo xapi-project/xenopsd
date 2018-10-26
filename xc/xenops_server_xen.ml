@@ -3220,6 +3220,7 @@ module Actions = struct
       sprintf "/local/domain/%d/control" domid;
       sprintf "/local/domain/%d/device" domid;
       sprintf "/local/domain/%d/rrd" domid;
+      sprintf "/local/domain/%d/vm-data" domid;
       sprintf "/local/domain/%d/feature" domid;
       sprintf "/vm/%s/rtc/timeoffset" uuid;
       sprintf "/local/domain/%d/xenserver/attr" domid;
