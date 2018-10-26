@@ -2233,7 +2233,7 @@ module Backend = struct
     let supports_nvme info = match info.Dm_Common.firmware with
      | Bios -> false
      | Uefi _ -> true
-    let name = "qemu-upstream"
+    let name = "qemu-upstream-uefi"
 
     (*
        0: i440FX
