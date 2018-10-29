@@ -2001,6 +2001,10 @@ module Dm_Common = struct
     | Disk  -> "force-lba=on"
     | Cdrom -> "force-lba=off"
 
+
+  type disk_type_args = int * string * media -> string list
+
+  let ide = "ide"
   let ide_device_of (index, file, media) =
     [ "-drive"; String.concat "," ([
           sprintf "file=%s" file;
@@ -2011,6 +2015,7 @@ module Dm_Common = struct
         ] @ (format_of_media media file))
     ]
 
+  let nvme = "nvme"
   let nvme_device_of (index, file, media) =
     let id = sprintf "disk%d" index in
     [ "-drive"; String.concat "," (
@@ -2173,68 +2178,88 @@ module Backend = struct
 
   (** Implementation of the backend common signature for the qemu-upstream-compat backend *)
   module type Qemu_upstream_config = sig
-    val max_emulated_nics: int (** Should be <= the hardcoded maximum number of emulated NICs *)
-    val max_emulated_disks: int option (** None = no limit *)
-    val nic_type: string
-    val supports_nvme: Dm_Common.info -> bool
-    val name: string
-    val pv_device_addr : Dm_Common.info -> nics:(string * string * int) list -> int
-    val nic_addr : devid:int -> index:int -> int
+    module NIC: sig
+      val max_emulated: int (** Should be <= the hardcoded maximum number of emulated NICs *)
+      val default: string
+      val addr: devid:int -> index:int -> int
+    end
+
+    module DISK : sig
+      val max_emulated: int option (** None = just the qemu imposed 4 IDE device limit *)
+      val default: string
+      val types: (string * Dm_Common.disk_type_args) list
+    end
+
+    module Firmware: sig
+      val supported: Xenops_types.Vm.firmware_type -> bool
+    end
+
+    module XenPV: sig
+      val addr : Dm_Common.info -> nics:(string * string * int) list -> int
+    end
+
+    val name : string
   end
 
   module Config_qemu_upstream_compat = struct
-    let max_emulated_nics = 8
-    let max_emulated_disks = None
-    let nic_type = "rtl8139"
-    let supports_nvme _ = false
-    let name = "qemu-upstream-compat"
+    module NIC = struct
+      let max_emulated = 8
 
-    let nic_base_addr = 4
-    let pv_device_addr info ~nics =
-      (** [first_gap n xs] expects an ascending list of integers [xs].
-       * It looks for a gap in sequence [xs] and returns the first it
-       * finds at position n or higher:
-       * first_gap 4 []      = 4
-       * first_gap 4 [5;6]   = 4
-       * first_gap 4 [1;3]   = 4
-       * first_gap 4 [5;6;8] = 4
-       * first_gap 4 [4;5;7] = 6
-       * first_gap 4 [4;5;6] = 7
-       *)
-      let rec first_gap n = function
-        | []             -> n
-        | x::xs when x<n -> first_gap n xs
-        | x::xs when x=n -> first_gap (n+1) xs
-        | x::xs          -> n
-      in
+      let default = "rtl8139"
 
-      let has_nvidia_vgpu =
-        let open Xenops_interface.Vgpu in
-        let open Dm_Common in
-        match info.disp with
-        | VNC(Vgpu [{implementation = Nvidia _}],_,_,_,_) -> true
-        | SDL(Vgpu [{implementation = Nvidia _}],_)       -> true
-        | _                                               -> false
-      in
+      let base_addr = 4
+      let addr ~devid ~index = devid + base_addr
+    end
 
-      if has_nvidia_vgpu then 2
-      else
-        nics
-        |> List.map (fun (_, _, devid) -> devid + nic_base_addr)
-        |> first_gap nic_base_addr
+    module DISK = struct
+      let max_emulated = None
+      let default = Dm_Common.ide
+      let types = [Dm_Common.ide, Dm_Common.ide_device_of]
+    end
 
-      let nic_addr ~devid ~index = devid + nic_base_addr
+    module XenPV = struct
+      let addr info ~nics =
+        (** [first_gap n xs] expects an ascending list of integers [xs].
+         * It looks for a gap in sequence [xs] and returns the first it
+         * finds at position n or higher:
+         * first_gap 4 []      = 4
+         * first_gap 4 [5;6]   = 4
+         * first_gap 4 [1;3]   = 4
+         * first_gap 4 [5;6;8] = 4
+         * first_gap 4 [4;5;7] = 6
+         * first_gap 4 [4;5;6] = 7
+        *)
+        let rec first_gap n = function
+          | []             -> n
+          | x::xs when x<n -> first_gap n xs
+          | x::xs when x=n -> first_gap (n+1) xs
+          | x::xs          -> n
+        in
+
+        let has_nvidia_vgpu =
+          let open Xenops_interface.Vgpu in
+          let open Dm_Common in
+          match info.disp with
+          | VNC(Vgpu [{implementation = Nvidia _}],_,_,_,_) -> true
+          | SDL(Vgpu [{implementation = Nvidia _}],_)       -> true
+          | _                                               -> false
+        in
+
+        if has_nvidia_vgpu then 2
+        else
+          nics
+          |> List.map (fun (_, _, devid) -> devid + NIC.base_addr)
+          |> first_gap NIC.base_addr
+    end
+
+    module Firmware = struct
+      let supported _ = true
+    end
+
+    let name = Profile.Name.qemu_upstream_compat
   end
 
   module Config_qemu_upstream_uefi = struct
-    let max_emulated_nics = 2
-    let max_emulated_disks = Some 1
-    let nic_type = "e1000"
-    let supports_nvme info = match info.Dm_Common.firmware with
-     | Bios -> false
-     | Uefi _ -> true
-    let name = "qemu-upstream-uefi"
-
     (*
        0: i440FX
        1: PIIX3
@@ -2245,8 +2270,31 @@ module Backend = struct
        7: NVME
        8+: vGPU and other pass-through devices
      *)
-    let nic_addr ~devid ~index = 4 + index
-    let pv_device_addr _ ~nics = 6
+    module NIC = struct
+      let max_emulated = 2
+      let default = "e1000"
+      let addr ~devid ~index = 4 + index
+    end
+
+    module DISK = struct
+      let max_emulated = Some 1
+      let default = Dm_Common.nvme
+      let types = [ Dm_Common.ide, Dm_Common.ide_device_of
+                  ; Dm_Common.nvme, Dm_Common.nvme_device_of ]
+    end
+
+    module XenPV = struct
+      let addr _ ~nics = 6
+    end
+
+    module Firmware = struct
+      let supported =
+        let open Xenops_types.Vm in function
+        | Bios -> false
+        | Uefi _ -> true
+    end
+
+    let name = Profile.Name.qemu_upstream_uefi
   end
 
   module Make_qemu_upstream(DefaultConfig: Qemu_upstream_config) : Intf  = struct
@@ -2600,20 +2648,24 @@ module Backend = struct
 
         let nic_type =
           try xs.Xs.read (sprintf "/local/domain/%d/platform/nic_type" domid)
-          with _ -> Config.nic_type
+          with _ -> Config.NIC.default
         in
 
-        let disk_interface =
-          match xs.Xs.read (sprintf "/local/domain/%d/platform/disk_type" domid) with
-          | "ide" -> Dm_Common.ide_device_of
-          | "nvme" when Config.supports_nvme info -> Dm_Common.nvme_device_of (* nvme won't work with Bios *)
-          | unknown ->
-            raise (Ioemu_failed (sprintf "domid %d" domid, sprintf "Unknown platform:disk_type=%s" unknown))
-          | exception _ ->
-            (* no override, use default *)
-            if Config.supports_nvme info then Dm_Common.nvme_device_of
-            else Dm_Common.ide_device_of
+        let disk_type =
+          try xs.Xs.read (sprintf "/local/domain/%d/platform/disk_type" domid)
+          with _ -> Config.DISK.default in
+
+        let disk_interface = match List.assoc_opt disk_type Config.DISK.types with
+          | Some interface -> interface
+          | None ->
+            raise (Ioemu_failed (sprintf "domid %d" domid,
+                                 sprintf "Unknown platform:disk_type=%s in device-model=%s" disk_type Config.name))
         in
+
+        if not (Config.Firmware.supported info.firmware) then
+          (* XAPI itself should've already prevented this, but lets double check *)
+          raise (Ioemu_failed (sprintf "domid %d" domid,
+                               sprintf "The firmware doesn't support device-model=%s" Config.name));
 
         let mult xs ys =
           List.map (fun x -> List.map (fun y -> x^"."^y) ys) xs |>
@@ -2687,7 +2739,7 @@ module Backend = struct
 
         let limit_emulated_disks disks =
           let disks = List.stable_sort (fun (a, _, _) (b, _, _) -> compare a b) disks in
-          match Config.max_emulated_disks with
+          match Config.DISK.max_emulated with
           | Some limit when List.length disks > limit ->
             debug "Limiting the number of emulated disks to %d" limit;
             Xapi_stdext_std.Listext.List.take limit disks
@@ -2704,7 +2756,7 @@ module Backend = struct
         let nics = List.stable_sort
           (fun (_,_,a) (_,_,b) -> compare a b) info.Dm_Common.nics in
         let nic_count = List.length nics in
-        let nic_max   = Config.max_emulated_nics in
+        let nic_max   = Config.NIC.max_emulated in
         if nic_count > nic_max then
           debug "Limiting the number of emulated NICs to %d" nic_max;
         (* Take the first 'max_emulated_nics' elements from the list. *)
@@ -2718,12 +2770,12 @@ module Backend = struct
           let ifname          = sprintf "tap%d.%d" domid devid in
           let uuid, _  as tap = tap_open ifname in
           let args =
-            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" nic_type devid mac (Config.nic_addr ~devid ~index)
+            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" nic_type devid mac (Config.NIC.addr ~devid ~index)
             ; "-netdev"; sprintf "tap,id=tapnet%d,fd=%s" devid uuid
             ] in
           (index+1, tap::fds, args@argv) in
 
-        let pv_device_addr = Config.pv_device_addr info ~nics in
+        let pv_device_addr = Config.XenPV.addr info ~nics in
 
         (* Go over all nics and collect file descriptors and command
          * line arguments. Add these to the already existing command
