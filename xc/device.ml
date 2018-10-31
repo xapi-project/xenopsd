@@ -2033,6 +2033,23 @@ module Dm_Common = struct
            (* 4 and 5 are NICs, and we can only have two, 6 is platform *)
          ])
     ]
+
+  let xen_platform ~xs ~domid =
+    let device_id =
+      try xs.Xs.read (sprintf "/local/domain/%d/platform/device_id" domid)
+      with _ -> "0001"
+    in
+    [ "-device"; String.concat "," [
+          "xen-platform"
+        ; "addr=3"
+        ; sprintf "device-id=0x%s" device_id
+        ; "revision=0x2"
+        ; "class-id=0x0100"
+        ; "subvendor_id=0x5853"
+        ; sprintf"subsystem_id=0x%s" device_id
+        ]
+    ]
+
 end (* End of module Dm_Common *)
 
 
@@ -2195,7 +2212,11 @@ module Backend = struct
     end
 
     module XenPV: sig
-      val addr : Dm_Common.info -> nics:(string * string * int) list -> int
+      val addr : xs:Xenstore.Xs.xsh -> domid: int -> Dm_Common.info -> nics:(string * string * int) list -> int
+    end
+
+    module XenPlatform: sig
+      val device: xs:Xenstore.Xs.xsh -> domid:int -> string list
     end
 
     val name : string
@@ -2204,9 +2225,7 @@ module Backend = struct
   module Config_qemu_upstream_compat = struct
     module NIC = struct
       let max_emulated = 8
-
       let default = "rtl8139"
-
       let base_addr = 4
       let addr ~devid ~index = devid + base_addr
     end
@@ -2217,8 +2236,19 @@ module Backend = struct
       let types = [Dm_Common.ide, Dm_Common.ide_device_of]
     end
 
+    module XenPlatform = struct
+      let device ~xs ~domid =
+        let has_platform_device =
+          try
+            int_of_string (xs.Xs.read (sprintf "/local/domain/%d/vm-data/disable_pf" domid)) <> 1
+          with _ -> true
+        in
+        if has_platform_device then Dm_Common.xen_platform ~xs ~domid
+        else []
+    end
+
     module XenPV = struct
-      let addr info ~nics =
+      let addr ~xs ~domid info ~nics =
         (** [first_gap n xs] expects an ascending list of integers [xs].
          * It looks for a gap in sequence [xs] and returns the first it
          * finds at position n or higher:
@@ -2246,6 +2276,7 @@ module Backend = struct
         in
 
         if has_nvidia_vgpu then 2
+        else if XenPlatform.device ~xs ~domid = [] then 3
         else
           nics
           |> List.map (fun (_, _, devid) -> devid + NIC.base_addr)
@@ -2284,7 +2315,11 @@ module Backend = struct
     end
 
     module XenPV = struct
-      let addr _ ~nics = 6
+      let addr ~xs ~domid _ ~nics = 6
+    end
+
+    module XenPlatform = struct
+      let device = Dm_Common.xen_platform
     end
 
     module Firmware = struct
@@ -2293,7 +2328,7 @@ module Backend = struct
         | Bios -> false
         | Uefi _ -> true
     end
-
+ 
     let name = Profile.Name.qemu_upstream_uefi
   end
 
@@ -2680,23 +2715,6 @@ module Backend = struct
                   List.map (fun x -> ["-qmp"; sprintf "unix:/var/run/xen/qmp-%s-%d,server,nowait" x domid]) |>
                   List.concat in
 
-        let xen_platform_device =
-            let device_id =
-              try xs.Xs.read (sprintf "/local/domain/%d/platform/device_id" domid)
-              with _ -> "0001"
-            in
-            [ "-device"; String.concat "," [
-                  "xen-platform"
-                ; "addr=3"
-                ; sprintf "device-id=0x%s" device_id
-                ; "revision=0x2"
-                ; "class-id=0x0100"
-                ; "subvendor_id=0x5853"
-                ; sprintf"subsystem_id=0x%s" device_id
-                ]
-            ]
-        in
-
         let pv_device addr =
           try
             let path = sprintf "/local/domain/%d/control/has-vendor-device" domid in
@@ -2729,7 +2747,7 @@ module Backend = struct
             ; (global |> List.map (fun x -> ["-global"; x]) |> List.concat)
             ; (info.Dm_Common.parallel |> function None -> [ "-parallel"; "null"] | Some x -> [ "-parallel"; x])
             ; qmp
-            ; xen_platform_device
+            ; Config.XenPlatform.device ~xs ~domid
             ] in
 
         let disks_cdrom, disks_other =
@@ -2775,7 +2793,7 @@ module Backend = struct
             ] in
           (index+1, tap::fds, args@argv) in
 
-        let pv_device_addr = Config.XenPV.addr info ~nics in
+        let pv_device_addr = Config.XenPV.addr ~xs ~domid info ~nics in
 
         (* Go over all nics and collect file descriptors and command
          * line arguments. Add these to the already existing command
