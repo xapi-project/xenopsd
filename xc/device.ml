@@ -56,7 +56,10 @@ module Profile = struct
   let of_string  = function
     | x when x = Name.qemu_trad            -> Qemu_trad
     | x when x = Name.qemu_upstream_compat -> Qemu_upstream_compat
-    | x when x = Name.qemu_upstream        -> Qemu_upstream
+    | x when x = Name.qemu_upstream        ->
+       sprintf "unsupported device-model profile %s: use %s" x Name.qemu_upstream_compat
+       |> fun s -> Xenopsd_error (Internal_error s)
+       |> raise
     | x when x = Name.qemu_upstream_uefi   -> Qemu_upstream_uefi
     | x -> debug "unknown device-model profile %s: defaulting to %s" x Name.qemu_upstream_compat;
       Qemu_upstream_compat
