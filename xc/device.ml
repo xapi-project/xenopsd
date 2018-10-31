@@ -1999,8 +1999,7 @@ module Dm_Common = struct
     | Cdrom, "" -> []
     | Cdrom, _  -> ["format=raw"]
 
-  let lba_of_media (media:media) =
-    match media with
+  let lba_of_media = function
     | Disk  -> "force-lba=on"
     | Cdrom -> "force-lba=off"
 
