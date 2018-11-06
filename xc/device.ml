@@ -2080,6 +2080,9 @@ module Backend = struct
       (** [get_vnc_port xenstore domid] returns the dom0 tcp port in which the vnc server for [domid] can be found *)
       val get_vnc_port : xs:Xenstore.Xs.xsh -> int -> Socket.t option
 
+      (** [assert_can_suspend xenstore xc] checks whether suspending is prevented by QEMU *)
+      val assert_can_suspend: xs:Xenstore.Xs.xsh -> Xenctrl.domid -> unit
+
       (** [suspend task xenstore qemu_domid xc] suspends a domain *)
       val suspend: Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> qemu_domid:int -> Xenctrl.domid -> unit
 
@@ -2121,6 +2124,8 @@ module Backend = struct
         Dm_Common.get_vnc_port ~xs domid ~f:(fun () ->
             (try Some(Socket.Port (int_of_string (xs.Xs.read (Generic.vnc_port_path domid)))) with _ -> None)
           )
+
+      let assert_can_suspend ~xs _ = ()
 
       let suspend (task: Xenops_task.task_handle) ~xs ~qemu_domid domid =
         Dm_Common.signal task ~xs ~qemu_domid ~domid "save" ~wait_for:"paused"
@@ -2575,6 +2580,25 @@ module Backend = struct
             Some (Socket.Unix (Dm_Common.vnc_socket_path domid))
           )
 
+      let assert_can_suspend ~xs domid =
+        let as_msg cmd = Qmp.(Success(Some __LOC__, cmd)) in
+        (* This will raise QMP_Error if it can't do it *)
+        match qmp_send_cmd domid Qmp.Query_migratable with
+        | Qmp.Unit -> debug "query-migratable precheck passed"
+        | other ->
+          raise @@
+          (Xenopsd_error (Internal_error (sprintf
+                                            "Unexpected result for QMP command: %s"
+                                            Qmp.(other |> as_msg |> string_of_message))))
+        | exception QMP_Error (domid, msg) ->
+          raise @@
+          Xenopsd_error (Device_detach_rejected("VM",
+                                                domid |> Xenops_helpers.uuid_of_domid ~xs
+                                                |> Uuidm.to_string,
+                                                msg))
+
+
+
       let suspend (task: Xenops_task.task_handle) ~xs ~qemu_domid domid =
         let as_msg cmd = Qmp.(Success(Some __LOC__, cmd)) in
         let perms      = [ Unix.O_WRONLY; Unix.O_CREAT ] in
@@ -2880,6 +2904,10 @@ module Dm = struct
   let get_vnc_port ~xs ~dm domid =
     let module Q = (val Backend.of_profile dm) in
     Q.Dm.get_vnc_port ~xs domid
+
+  let assert_can_suspend ~xs ~dm domid =
+    let module Q = (val Backend.of_profile dm) in
+    Q.Dm.assert_can_suspend ~xs domid
 
   let suspend (task: Xenops_task.task_handle) ~xs ~qemu_domid ~dm domid =
     let module Q = (val Backend.of_profile dm) in
