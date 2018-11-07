@@ -1747,8 +1747,8 @@ module VM = struct
         match domid_of_uuid ~xc ~xs uuid with
         | None -> failwith (Printf.sprintf "VM %s disappeared" (Uuidm.to_string uuid))
         | Some domid ->
-         Device.Dm.assert_can_suspend ~xs ~dm:(dm_of ~vm) domid
-    )
+          Device.Dm.assert_can_suspend ~xs ~dm:(dm_of ~vm) domid
+      )
 
   let save task progress_callback vm flags data vgpu_data pre_suspend_callback =
     let flags' =
@@ -1990,6 +1990,9 @@ module VM = struct
                  -1.0
              end
            in
+           let not_migratable () =
+             try assert_can_save vm; false
+             with _ -> true in
            {
              Vm.power_state = if di.Xenctrl.paused then Paused else Running;
              domids = [ di.Xenctrl.domid ];
@@ -2015,7 +2018,7 @@ module VM = struct
              nomigrate = begin match vme with
                | None   -> false
                | Some x -> x.VmExtra.persistent.VmExtra.nomigrate
-             end;
+             end || not_migratable ();
              nested_virt = begin match vme with
                | None   -> false
                | Some x -> x.VmExtra.persistent.VmExtra.nested_virt
