@@ -1990,9 +1990,6 @@ module VM = struct
                  -1.0
              end
            in
-           let not_migratable () =
-             try assert_can_save vm; false
-             with _ -> true in
            {
              Vm.power_state = if di.Xenctrl.paused then Paused else Running;
              domids = [ di.Xenctrl.domid ];
@@ -2018,7 +2015,7 @@ module VM = struct
              nomigrate = begin match vme with
                | None   -> false
                | Some x -> x.VmExtra.persistent.VmExtra.nomigrate
-             end || not_migratable ();
+             end;
              nested_virt = begin match vme with
                | None   -> false
                | Some x -> x.VmExtra.persistent.VmExtra.nested_virt
