@@ -2389,7 +2389,7 @@ module Backend = struct
       (* This will raise QMP_Error if it can't do it, we catch it and update xenstore. *)
       match qmp_send_cmd domid Qmp.Query_migratable with
       | Qmp.Unit ->
-        debug "query-migratable precheck passed";
+        debug "query-migratable precheck passed (domid=%d)" domid;
         Generic.safe_rm ~xs path;
       | other ->
         raise @@
@@ -2589,14 +2589,14 @@ module Backend = struct
         QMP_Event.update_cant_suspend domid xs;
         match xs.Xs.read (Dm_Common.cant_suspend_reason_path domid) with
         | msg ->
-          debug "assert_can_suspend: rejecting";
+          debug "assert_can_suspend: rejecting (domid=%d)" domid;
           raise @@
           Xenopsd_error (Device_detach_rejected("VM",
                                                 domid |> Xenops_helpers.uuid_of_domid ~xs
                                                 |> Uuidm.to_string,
                                                 msg))
         | exception e ->
-          debug "assert_can_suspend: OK";
+          debug "assert_can_suspend: OK (domid=%d)" domid;
           () (* key not present *)
 
       let suspend (task: Xenops_task.task_handle) ~xs ~qemu_domid domid =
