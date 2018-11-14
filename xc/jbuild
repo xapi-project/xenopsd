@@ -37,6 +37,7 @@ let () = Printf.ksprintf Jbuild_plugin.V1.send {|
     astring
     xenctrl
     xapi-xenopsd
+    xapi-xenopsd.depriv
     xenstore
     xenstore.unix
     xenstore_transport.unix
