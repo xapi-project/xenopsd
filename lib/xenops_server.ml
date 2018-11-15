@@ -2725,15 +2725,12 @@ let register_objects () =
        List.iter VUSB_DB.signal (VUSB_DB.ids vm);
     ) (VM_DB.ids ())
 
-type rpc_t = Rpc.t
-let typ_of_rpc_t = Rpc.Types.(Abstract { aname="Rpc.t"; test_data = [Rpc.Null]; rpc_of = (fun x -> x); of_rpc = (fun x -> Ok x) })
-
 module Diagnostics = struct
   type t = {
     queues: Redirector.Dump.t;
     workers: WorkerPool.Dump.t;
-    scheduler: rpc_t;
-    updates: rpc_t;
+    scheduler: Rpc.t;
+    updates: Rpc.t;
     tasks: WorkerPool.Dump.task list;
     vm_actions: (string * domain_action_request option) list;
   } [@@deriving rpcty]
