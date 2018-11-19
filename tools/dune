@@ -1,14 +1,13 @@
-(jbuild_version 1)
 
-(executable (
+(executable 
   (name set_domain_uuid)
   (public_name set-domain-uuid)
   (package xapi-xenopsd-xc)
-  (flags (:standard -warn-error +a-3))
-  (libraries (
+  (flags :standard -warn-error +a-3)
+  (libraries 
     xenctrl
     uuidm
     cmdliner
     profiling
-  ))
-))
+  )
+)
