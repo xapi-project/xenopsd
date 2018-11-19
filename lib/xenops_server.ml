@@ -2706,10 +2706,79 @@ let internal_event_thread_body = Debug.with_thread_associated "events" (fun () -
     done
   )
 
+module DB=Dbgen.Make(Xenops_types.DB)
+
+let db_m = Mutex.create ()
+let db_c = Condition.create ()
+
+let internal_event_thread2 = ref None
+
+let internal_event_thread2_body : unit -> unit = Debug.with_thread_associated "events2" (fun () ->
+    debug "Starting internal event thread 2";
+    let dbg = "events2" in
+    let id = ref None in
+    while true do
+      try
+        while true do
+          let (_barriers,updates,token) = UPDATES.get () dbg !id (Some 30) in
+          debug "Got some updates (gen=%Ld)" (DB.db.gen);
+          List.iter (fun u ->
+            match u with
+            | Dynamic.Vm id ->
+              debug "VM update: %s" id;
+              let (_,st) = VM.stat () dbg id in
+              let ref = Rpc.Types.make_ref Vm.STATE Vm.typ_of_state id in 
+              DB.update_obj ref st
+            | Dynamic.Task id -> 
+              debug "Task update: %s" id;
+              let st = TASK.stat () dbg id in
+              let ref = Rpc.Types.make_ref Task.T Task.typ_of id in
+              DB.update_obj ref st
+            | Dynamic.Vbd (id1,id2) ->
+              debug "VBD update: %s.%s" id1 id2;
+              let (_,st) = VBD.stat () dbg (id1,id2) in
+              let ref = Rpc.Types.make_ref Vbd.STATE Vbd.typ_of_state (id1^"."^id2) in
+              DB.update_obj ref st
+            | Dynamic.Vif (id1,id2) ->
+              debug "VIF update: %s.%s" id1 id2;
+              let (_,st) = VIF.stat () dbg (id1,id2) in
+              let ref = Rpc.Types.make_ref Vif.STATE Vif.typ_of_state (id1^"."^id2) in
+              DB.update_obj ref st
+            | Dynamic.Pci (id1,id2) ->
+              debug "PCI update: %s.%s" id1 id2;
+              let (_,st) = PCI.stat () dbg (id1,id2) in
+              let ref = Rpc.Types.make_ref Pci.STATE Pci.typ_of_state (id1^"."^id2) in
+              DB.update_obj ref st
+            | Dynamic.Vgpu (id1,id2) ->
+              let (_,st) = VGPU.stat () dbg (id1,id2) in
+              let ref = Rpc.Types.make_ref Vgpu.STATE Vgpu.typ_of_state (id1^"."^id2) in
+              DB.update_obj ref st
+            | Dynamic.Vusb (id1,id2) ->
+              let (_,st) = VUSB.stat () dbg (id1,id2) in
+              let ref = Rpc.Types.make_ref Vusb.STATE Vusb.typ_of_state (id1^"."^id2) in
+              DB.update_obj ref st
+            ) updates;
+          Mutex.execute db_m (fun () -> Condition.broadcast db_c)
+        done
+      with _ -> ()
+    done)
+
+let get_deltas dbg last timeout =
+  debug "in get deltas";
+  let last' = match last with None -> (-1L) | Some x -> Int64.of_int x in 
+  Mutex.execute db_m (fun () ->
+    debug "got mutex";
+    while last' = DB.db.gen do
+      Condition.wait db_c db_m
+    done);
+  debug "dumping...";
+  DB.dump_since last'
+
 let set_backend m =
   backend := m;
   (* start the internal event thread *)
   internal_event_thread := Some (Thread.create internal_event_thread_body ());
+  internal_event_thread2 := Some (Thread.create internal_event_thread2_body ());
   let module B = (val get_backend () : S) in
   B.init ()
 
@@ -2836,5 +2905,6 @@ let _ =
   Server.UPDATES.inject_barrier (UPDATES.inject_barrier ());
   Server.UPDATES.remove_barrier (UPDATES.remove_barrier ());
   Server.UPDATES.refresh_vm (UPDATES.refresh_vm ());
+  Server.UPDATES.get_deltas (get_deltas);
   Server.DEBUG.trigger (DEBUG.trigger ());
   Server.DEBUG.shutdown (DEBUG.shutdown ())
