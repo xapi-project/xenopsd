@@ -2776,6 +2776,14 @@ let get_deltas dbg last timeout =
   debug "dumping...";
   DB.dump_since last' !db
 
+let inject dbg =
+  debug "Inject";
+  Mutex.execute db_m (fun () ->
+    let newdb = DB.inject !db in
+    db := newdb;
+    Condition.broadcast db_c;
+    newdb.DB.gen)
+
 let set_backend m =
   backend := m;
   (* start the internal event thread *)
@@ -2908,5 +2916,6 @@ let _ =
   Server.UPDATES.remove_barrier (UPDATES.remove_barrier ());
   Server.UPDATES.refresh_vm (UPDATES.refresh_vm ());
   Server.UPDATES.get_deltas (get_deltas);
+  Server.UPDATES.inject (inject);
   Server.DEBUG.trigger (DEBUG.trigger ());
   Server.DEBUG.shutdown (DEBUG.shutdown ())
