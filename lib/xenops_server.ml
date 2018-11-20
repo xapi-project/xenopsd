@@ -2759,6 +2759,7 @@ let internal_event_thread2_body : unit -> unit = Debug.with_thread_associated "e
               let ref = Rpc.Types.make_ref Vusb.STATE Vusb.typ_of_state (id1^"."^id2) in
               db := DB.update_obj ref st !db
             ) updates;
+          id := Some token;
           Mutex.execute db_m (fun () -> Condition.broadcast db_c)
         done
       with _ -> ()
