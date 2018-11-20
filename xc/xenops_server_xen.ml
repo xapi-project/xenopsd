@@ -3343,13 +3343,13 @@ module Actions = struct
         | _ -> ()
       end
 
-  let add_device_watch xs watch_cb device =
+  let add_device_watch xs watch_cb dev =
     let open Device_common in
     debug "Adding watches for: %s" (string_of_device dev);
     let domid = dev.frontend.domid in
     let token = watch_token domid in
-    List.iter (Xenstore_watch.watch ~xs token watch_cb) (watches_of_device device);
-    device_watches := IntMap.add domid (device :: (IntMap.find domid !device_watches)) !device_watches
+    List.iter (Xenstore_watch.watch ~xs token watch_cb) (watches_of_device dev);
+    device_watches := IntMap.add domid (dev :: (IntMap.find domid !device_watches)) !device_watches
 
   let remove_device_watch xs dev =
     let open Device_common in

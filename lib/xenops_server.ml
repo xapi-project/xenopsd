@@ -2710,6 +2710,7 @@ module DB=Dbgen.Make(Xenops_types.DB)
 
 let db_m = Mutex.create ()
 let db_c = Condition.create ()
+let db = ref DB.empty
 
 let internal_event_thread2 = ref None
 
@@ -2721,42 +2722,42 @@ let internal_event_thread2_body : unit -> unit = Debug.with_thread_associated "e
       try
         while true do
           let (_barriers,updates,token) = UPDATES.get () dbg !id (Some 30) in
-          debug "Got some updates (gen=%Ld)" (DB.db.gen);
+          debug "Got some updates (gen=%Ld)" (!db.gen);
           List.iter (fun u ->
             match u with
             | Dynamic.Vm id ->
               debug "VM update: %s" id;
               let (_,st) = VM.stat () dbg id in
               let ref = Rpc.Types.make_ref Vm.STATE Vm.typ_of_state id in 
-              DB.update_obj ref st
+              db := DB.update_obj ref st !db
             | Dynamic.Task id -> 
               debug "Task update: %s" id;
               let st = TASK.stat () dbg id in
               let ref = Rpc.Types.make_ref Task.T Task.typ_of id in
-              DB.update_obj ref st
+              db := DB.update_obj ref st !db
             | Dynamic.Vbd (id1,id2) ->
               debug "VBD update: %s.%s" id1 id2;
               let (_,st) = VBD.stat () dbg (id1,id2) in
               let ref = Rpc.Types.make_ref Vbd.STATE Vbd.typ_of_state (id1^"."^id2) in
-              DB.update_obj ref st
+              db := DB.update_obj ref st !db
             | Dynamic.Vif (id1,id2) ->
               debug "VIF update: %s.%s" id1 id2;
               let (_,st) = VIF.stat () dbg (id1,id2) in
               let ref = Rpc.Types.make_ref Vif.STATE Vif.typ_of_state (id1^"."^id2) in
-              DB.update_obj ref st
+              db := DB.update_obj ref st !db
             | Dynamic.Pci (id1,id2) ->
               debug "PCI update: %s.%s" id1 id2;
               let (_,st) = PCI.stat () dbg (id1,id2) in
               let ref = Rpc.Types.make_ref Pci.STATE Pci.typ_of_state (id1^"."^id2) in
-              DB.update_obj ref st
+              db := DB.update_obj ref st !db
             | Dynamic.Vgpu (id1,id2) ->
               let (_,st) = VGPU.stat () dbg (id1,id2) in
               let ref = Rpc.Types.make_ref Vgpu.STATE Vgpu.typ_of_state (id1^"."^id2) in
-              DB.update_obj ref st
+              db := DB.update_obj ref st !db
             | Dynamic.Vusb (id1,id2) ->
               let (_,st) = VUSB.stat () dbg (id1,id2) in
               let ref = Rpc.Types.make_ref Vusb.STATE Vusb.typ_of_state (id1^"."^id2) in
-              DB.update_obj ref st
+              db := DB.update_obj ref st !db
             ) updates;
           Mutex.execute db_m (fun () -> Condition.broadcast db_c)
         done
@@ -2768,11 +2769,11 @@ let get_deltas dbg last timeout =
   let last' = match last with None -> (-1L) | Some x -> Int64.of_int x in 
   Mutex.execute db_m (fun () ->
     debug "got mutex";
-    while last' = DB.db.gen do
+    while last' = !db.gen do
       Condition.wait db_c db_m
     done);
   debug "dumping...";
-  DB.dump_since last'
+  DB.dump_since last' !db
 
 let set_backend m =
   backend := m;
