@@ -1991,14 +1991,15 @@ module Dm_Common = struct
   type disk_type_args = int * string * media -> string list
 
   let ide = "ide"
-  let ide_device_of (index, file, media) =
-    [ "-drive"; String.concat "," ([
-          sprintf "file=%s" file;
-          "if=ide";
-          sprintf "index=%d" index;
-          sprintf "media=%s" (string_of_media media);
-          lba_of_media media;
-        ] @ (format_of_media media file))
+  let ide_device_of ~trad_compat (index, file, media) =
+    [ "-drive"; String.concat "," (List.concat [
+          [ sprintf "file=%s" file
+          ; "if=ide"
+          ; sprintf "index=%d" index
+          ; sprintf "media=%s" (string_of_media media)
+          ]
+        ; if trad_compat then [lba_of_media media] else []
+        ; format_of_media media file])
     ]
 
   let nvme = "nvme"
@@ -2009,7 +2010,6 @@ module Dm_Common = struct
           ; "if=none"
           ; sprintf "file=%s" file
           ; sprintf "media=%s" (string_of_media media)
-          ; lba_of_media media
           ] @ (format_of_media media file))
     ; "-device"; String.concat ","
         ([ "nvme"
@@ -2020,20 +2020,21 @@ module Dm_Common = struct
          ])
     ]
 
-  let xen_platform ~xs ~domid =
+  let xen_platform ~trad_compat ~xs ~domid =
     let device_id =
       try xs.Xs.read (sprintf "/local/domain/%d/platform/device_id" domid)
       with _ -> "0001"
     in
-    [ "-device"; String.concat "," [
-          "xen-platform"
-        ; "addr=3"
-        ; sprintf "device-id=0x%s" device_id
-        ; "revision=0x2"
-        ; "class-id=0x0100"
-        ; "subvendor_id=0x5853"
-        ; sprintf"subsystem_id=0x%s" device_id
-        ]
+    [ "-device"; String.concat "," (List.concat [
+          [ "xen-platform"
+          ; "addr=3"
+          ]
+        ; if trad_compat then
+            [ sprintf "device-id=0x%s" device_id
+            ; "revision=0x2"
+            ; "class-id=0x0100"
+            ; "subvendor_id=0x5853"
+            ; sprintf"subsystem_id=0x%s" device_id ] else []])
     ]
 
   let cant_suspend_reason_path domid =
@@ -2185,6 +2186,7 @@ module Backend = struct
       val max_emulated: int (** Should be <= the hardcoded maximum number of emulated NICs *)
       val default: string
       val addr: devid:int -> index:int -> int
+      val extra_flags: string list
     end
 
     module DISK : sig
@@ -2205,6 +2207,7 @@ module Backend = struct
       val device: xs:Xenstore.Xs.xsh -> domid:int -> string list
     end
 
+    val extra_qemu_args: nic_type:string -> string list
     val name : string
   end
 
@@ -2214,12 +2217,13 @@ module Backend = struct
       let default = "rtl8139"
       let base_addr = 4
       let addr ~devid ~index = devid + base_addr
+      let extra_flags = []
     end
 
     module DISK = struct
       let max_emulated = None
       let default = Dm_Common.ide
-      let types = [Dm_Common.ide, Dm_Common.ide_device_of]
+      let types = [Dm_Common.ide, Dm_Common.ide_device_of ~trad_compat:true]
     end
 
     module XenPlatform = struct
@@ -2229,7 +2233,7 @@ module Backend = struct
             int_of_string (xs.Xs.read (sprintf "/local/domain/%d/vm-data/disable_pf" domid)) <> 1
           with _ -> true
         in
-        if has_platform_device then Dm_Common.xen_platform ~xs ~domid
+        if has_platform_device then Dm_Common.xen_platform ~trad_compat:true ~xs ~domid
         else []
     end
 
@@ -2274,6 +2278,19 @@ module Backend = struct
     end
 
     let name = Profile.Name.qemu_upstream_compat
+    let extra_qemu_args ~nic_type =
+      let mult xs ys =
+        List.map (fun x -> List.map (fun y -> x^"."^y) ys) xs |>
+        List.concat in
+      List.concat [
+        ["-trad-compat"]
+        ; [ "-global"; "PIIX4_PM.revision_id=0x1"]
+        ; [ "-global"; "ide-hd.ver=0.10.2"]
+        ; mult
+            ["piix3-ide-xen"; "piix3-usb-uhci"; nic_type]
+            ["subvendor_id=0x5853"; "subsystem_id=0x0001"]
+          |> List.map (fun x -> ["-global"; x]) |> List.concat
+      ]
   end
 
   module Config_qemu_upstream_uefi = struct
@@ -2291,12 +2308,13 @@ module Backend = struct
       let max_emulated = 2
       let default = "e1000"
       let addr ~devid ~index = 4 + index
+      let extra_flags = ["rombar=0"]
     end
 
     module DISK = struct
       let max_emulated = Some 1
       let default = Dm_Common.nvme
-      let types = [ Dm_Common.ide, Dm_Common.ide_device_of
+      let types = [ Dm_Common.ide, Dm_Common.ide_device_of ~trad_compat:false
                   ; Dm_Common.nvme, Dm_Common.nvme_device_of ]
     end
 
@@ -2305,7 +2323,7 @@ module Backend = struct
     end
 
     module XenPlatform = struct
-      let device = Dm_Common.xen_platform
+      let device = Dm_Common.xen_platform ~trad_compat:false
     end
 
     module Firmware = struct
@@ -2314,8 +2332,10 @@ module Backend = struct
         | Bios -> false
         | Uefi _ -> true
     end
- 
+
     let name = Profile.Name.qemu_upstream_uefi
+
+    let extra_qemu_args ~nic_type:_ = []
   end
 
   (** Handler for the QMP events in upstream qemu *)
@@ -2718,15 +2738,6 @@ module Backend = struct
           raise (Ioemu_failed (sprintf "domid %d" domid,
                                sprintf "The firmware doesn't support device-model=%s" Config.name));
 
-        let mult xs ys =
-          List.map (fun x -> List.map (fun y -> x^"."^y) ys) xs |>
-          List.concat in
-        let global =
-          mult
-            ["piix3-ide-xen"; "piix3-usb-uhci"; nic_type]
-            ["subvendor_id=0x5853"; "subsystem_id=0x0001"]
-        in
-
         let qmp = ["libxl"; "event"] |>
                   List.map (fun x -> ["-qmp"; sprintf "unix:/var/run/xen/qmp-%s-%d,server,nowait" x domid]) |>
                   List.concat in
@@ -2755,12 +2766,7 @@ module Backend = struct
             ; [ "-trace"; "enable=xen_platform_log"]
             ; [ "-sandbox"; "on,obsolete=deny,elevateprivileges=allow,spawn=deny,resourcecontrol=deny"]
             ; [ "-S"]
-            ; [ "-global"; "PIIX4_PM.revision_id=0x1"]
-            ; [ "-global"; "ide-hd.ver=0.10.2"]
-            ; [ "-global"; "e1000.autonegotiation=on"]
-            ; [ "-global"; "e1000.mitigation=on"]
-            ; [ "-global"; "e1000.extra_mac_registers=on"]
-            ; (global |> List.map (fun x -> ["-global"; x]) |> List.concat)
+            ; Config.extra_qemu_args ~nic_type
             ; (info.Dm_Common.parallel |> function None -> [ "-parallel"; "null"] | Some x -> [ "-parallel"; x])
             ; qmp
             ; Config.XenPlatform.device ~xs ~domid
@@ -2781,7 +2787,7 @@ module Backend = struct
         in
 
         let disks' =
-          [ List.map Dm_Common.ide_device_of disks_cdrom
+          [ List.map (List.assoc Dm_Common.ide Config.DISK.types) disks_cdrom
           ; disks_other |> limit_emulated_disks |> List.map disk_interface ]
           |> List.concat |> List.concat
         in
@@ -2804,7 +2810,8 @@ module Backend = struct
           let ifname          = sprintf "tap%d.%d" domid devid in
           let uuid, _  as tap = tap_open ifname in
           let args =
-            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x" nic_type devid mac (Config.NIC.addr ~devid ~index)
+            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x%s" nic_type devid mac (Config.NIC.addr ~devid ~index)
+                (String.concat "," ("" :: Config.NIC.extra_flags))
             ; "-netdev"; sprintf "tap,id=tapnet%d,fd=%s" devid uuid
             ] in
           (index+1, tap::fds, args@argv) in
