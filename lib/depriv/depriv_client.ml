@@ -17,6 +17,6 @@ open Depriv_interface
 (* daemon only listens on message-switch *)
 let rpc call = Xcp_client.json_switch_rpc queue_name call
 
-module Client = DeprivAPI (Idl.GenClientExnRpc (struct
+module Client = DeprivAPI (Idl.Exn.GenClient (struct
   let rpc = rpc
 end))
