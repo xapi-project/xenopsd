@@ -2774,7 +2774,10 @@ let get_deltas dbg last timeout =
       Condition.wait db_c db_m
     done);
   debug "dumping...";
-  DB.dump_since last' !db
+  let (gen, rpc_opt) = DB.dump_since last' !db in
+  match rpc_opt with
+  | Some rpc -> (gen,rpc)
+  | None -> (gen,Rpc.Dict ["__p",Rpc.Bool true])
 
 let inject dbg =
   debug "Inject";
