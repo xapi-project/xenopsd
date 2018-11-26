@@ -2054,7 +2054,7 @@ module Dm_Common = struct
       let gid = (varstored_chroot ~domid).Chroot.gid in
       let dbg = Printf.sprintf "stop_varstored for domid %d" domid in
       Generic.best_effort "Stop listening on deprivileged socket" (fun () ->
-          Depriv_client.Client.destroy dbg gid);
+          Varstore_privileged_client.Client.destroy dbg gid);
       Chroot.destroy @@ varstored_chroot ~domid
     in
     stop_vgpu ();
@@ -3029,7 +3029,7 @@ module Dm = struct
     let absolute_socket_path = Chroot.absolute_path_outside chroot socket_path in
     let vm_uuidm = match Uuidm.of_string vm_uuid with Some uuid -> uuid | None ->
      failwith (Printf.sprintf "Invalid VM uuid %s" vm_uuid) in
-    Depriv_client.Client.create (Xenops_task.get_dbg task) vm_uuidm chroot.gid absolute_socket_path;
+    Varstore_privileged_client.Client.create (Xenops_task.get_dbg task) vm_uuidm chroot.gid absolute_socket_path;
 (*    Unix.chmod absolute_socket_path 0o660;
       Unix.chown absolute_socket_path 0 chroot.gid; *)
     Chroot.prepare chroot efivars_save_path;
