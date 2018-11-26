@@ -1700,12 +1700,18 @@ end = struct
     { root; uid; gid }
 
   let create chroot =
-    Xenops_utils.Unixext.mkdir_rec chroot.root 0o755;
-    (* we want parent dir to be 0o755 and this dir 0o750 *)
-    Unix.chmod chroot.root 0o750;
-    (* the chrooted daemon will have r-x permissions *)
-    Unix.chown chroot.root 0 chroot.gid;
-    debug "Created chroot %s" chroot.root
+    try
+      Xenops_utils.Unixext.mkdir_rec chroot.root 0o755;
+      (* we want parent dir to be 0o755 and this dir 0o750 *)
+      Unix.chmod chroot.root 0o750;
+      (* the chrooted daemon will have r-x permissions *)
+      Unix.chown chroot.root 0 chroot.gid;
+      debug "Created chroot %s" chroot.root
+    with e ->
+      Backtrace.is_important e;
+      D.warn "Failed to create chroot at %s for UID %d: %s" chroot.root chroot.uid
+        (Printexc.to_string e);
+      raise e
 
   let destroy chroot =
     Generic.best_effort (Printf.sprintf "removing chroot %s" chroot.root)
