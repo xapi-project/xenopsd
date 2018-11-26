@@ -2810,8 +2810,12 @@ module Backend = struct
           let ifname          = sprintf "tap%d.%d" domid devid in
           let uuid, _  as tap = tap_open ifname in
           let args =
-            [ "-device"; sprintf "%s,netdev=tapnet%d,mac=%s,addr=%x%s" nic_type devid mac (Config.NIC.addr ~devid ~index)
-                (String.concat "," ("" :: Config.NIC.extra_flags))
+            [ "-device"; String.concat "," (
+                  [ nic_type
+                  ; sprintf "netdev=tapnet%d" devid
+                  ; sprintf "mac=%s" mac
+                  ; sprintf "addr=%x" (Config.NIC.addr ~devid ~index) ]
+                  @ Config.NIC.extra_flags)
             ; "-netdev"; sprintf "tap,id=tapnet%d,fd=%s" devid uuid
             ] in
           (index+1, tap::fds, args@argv) in
