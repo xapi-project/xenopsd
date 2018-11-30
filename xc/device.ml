@@ -1714,8 +1714,9 @@ end = struct
       raise e
 
   let destroy chroot =
-    Generic.best_effort (Printf.sprintf "removing chroot %s" chroot.root)
-      (fun () -> Xenops_utils.FileFS.rmtree chroot.root)
+    if Sys.file_exists chroot.root then
+      Generic.best_effort (Printf.sprintf "removing chroot %s" chroot.root)
+        (fun () -> Xenops_utils.FileFS.rmtree chroot.root)
 end
 
 (** Dm_Common contains the private Dm functions that are common between the qemu profile backends. *)
@@ -2051,11 +2052,14 @@ module Dm_Common = struct
     let stop_vgpu () = Vgpu.stop ~xs domid in
     let stop_varstored () =
       Varstored.stop ~xs domid;
-      let gid = (varstored_chroot ~domid).Chroot.gid in
-      let dbg = Printf.sprintf "stop_varstored for domid %d" domid in
-      Generic.best_effort "Stop listening on deprivileged socket" (fun () ->
-          Varstore_privileged_client.Client.destroy dbg gid);
-      Chroot.destroy @@ varstored_chroot ~domid
+      let chroot = varstored_chroot ~domid in
+      if Sys.file_exists chroot.Chroot.root then begin
+        let gid = chroot.Chroot.gid in
+        let dbg = Printf.sprintf "stop_varstored for domid %d" domid in
+        Generic.best_effort "Stop listening on deprivileged socket" (fun () ->
+            Varstore_privileged_client.Client.destroy dbg gid);
+        Chroot.destroy @@ varstored_chroot ~domid;
+      end
     in
     stop_vgpu ();
     stop_varstored ();
