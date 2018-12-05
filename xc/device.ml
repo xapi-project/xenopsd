@@ -1821,16 +1821,19 @@ module Dm_Common = struct
     @ disp_options
     @ (List.fold_left (fun l (k, v) -> ("-" ^ k) :: (match v with None -> l | Some v -> v :: l)) [] extras)
 
-  let vgpu_args_of_nvidia domid vcpus (vgpu:Xenops_interface.Vgpu.nvidia) pci restore =
+  let vgpu_args_of_nvidia domid vcpus (vgpu:Xenops_interface.Vgpu.nvidia) pci restore device =
     let open Xenops_interface.Vgpu in
     let suspend_file = sprintf demu_save_path domid in
+    let device_opt = match device with
+      | None -> []
+      | Some d -> ["--device"; string_of_int d] in
     let base_args = [
       "--domain=" ^ (string_of_int domid);
       "--vcpus=" ^ (string_of_int vcpus);
       "--gpu=" ^ (Xenops_interface.Pci.string_of_address pci);
       "--config=" ^ vgpu.config_file;
       "--suspend=" ^ suspend_file;
-    ] in
+    ] @ device_opt in
     let fd_arg = if restore then ["--resume"] else [] in
     List.concat [base_args; fd_arg]
 
@@ -1884,7 +1887,7 @@ module Dm_Common = struct
     (string_of_int domid) :: "--syslog" :: args
 
   (* Forks a daemon and then returns the pid. *)
-  let start_daemon ~path ~args ~name ~domid ?(fds=[]) _ =
+  let start_daemon ~path ~args ~name ~domid ?(fds=[]) () =
     debug "Starting daemon: %s with args [%s]" path (String.concat "; " args);
     let syslog_key = (Printf.sprintf "%s-%d" name domid) in
     let syslog_stdout = Forkhelpers.Syslog_WithKey syslog_key in
@@ -2049,6 +2052,12 @@ module Backend = struct
   (** Common signature for all the profile backends *)
   module type Intf = sig
 
+    (** Vgpu functions that use the dispatcher to choose between different profile
+     * and device-model backends *)
+    module Vgpu: sig
+      val device: index:int -> int option
+    end
+
     (** Vbd functions that use the dispatcher to choose between different profile backends *)
     module Vbd: sig
       val qemu_media_change : xs:Xenstore.Xs.xsh -> device -> string -> string -> unit
@@ -2091,6 +2100,9 @@ module Backend = struct
 
   (** Implementation of the backend common signature for the qemu-trad backend *)
   module Qemu_trad : Intf = struct
+    module Vgpu = struct
+      let device ~index:_ = None
+    end
 
     (** Implementation of the Vbd functions that use the dispatcher for the qemu-trad backend *)
     module Vbd = struct
@@ -2207,6 +2219,10 @@ module Backend = struct
       val device: xs:Xenstore.Xs.xsh -> domid:int -> string list
     end
 
+    module VGPU: sig
+      val device: index:int -> int option
+    end
+
     val extra_qemu_args: nic_type:string -> string list
     val name : string
   end
@@ -2235,6 +2251,10 @@ module Backend = struct
         in
         if has_platform_device then Dm_Common.xen_platform ~trad_compat:true ~xs ~domid
         else []
+    end
+
+    module VGPU = struct
+      let device ~index:_ = None
     end
 
     module XenPV = struct
@@ -2320,6 +2340,10 @@ module Backend = struct
 
     module XenPV = struct
       let addr ~xs ~domid _ ~nics = 6
+    end
+
+    module VGPU = struct
+      let device ~index = Some (8 + index)
     end
 
     module XenPlatform = struct
@@ -2502,6 +2526,10 @@ module Backend = struct
   end
 
   module Make_qemu_upstream(DefaultConfig: Qemu_upstream_config) : Intf  = struct
+    module Vgpu = struct
+      let device = DefaultConfig.VGPU.device
+    end
+
     (** Implementation of the Vbd functions that use the dispatcher for the qemu-upstream-compat backend *)
     module Vbd = struct
 
@@ -2982,9 +3010,11 @@ module Dm = struct
         debug "start_vgpu: got VGPU with physical pci address %s"
           (Xenops_interface.Pci.string_of_address pci);
         PCI.bind [pci] PCI.Nvidia;
-        let args = vgpu_args_of_nvidia domid vcpus vgpu pci restore in
+        let module Q = (val Backend.of_profile profile) in
+        let device = Q.Vgpu.device ~index:0 in
+        let args = vgpu_args_of_nvidia domid vcpus vgpu pci restore device in
         let vgpu_pid = start_daemon ~path:!Xc_resources.vgpu ~args ~name:"vgpu"
-            ~domid ~fds:[] profile in
+            ~domid ~fds:[] () in
         wait_path ~pid:vgpu_pid ~task ~name:"vgpu" ~domid ~xs
           ~ready_path:state_path ~timeout:!Xenopsd.vgpu_ready_timeout
           ~cancel ();
@@ -3107,9 +3137,9 @@ module Dm = struct
   let start_vnconly (task: Xenops_task.task_handle) ~xs ~dm ?timeout info domid =
     __start task ~xs ~dm ?timeout StartVNC info domid
 
-  let restore_vgpu (task: Xenops_task.task_handle) ~xs domid vgpu vcpus =
+  let restore_vgpu (task: Xenops_task.task_handle) ~xs domid vgpu vcpus profile =
     debug "Called Dm.restore_vgpu";
-    start_vgpu ~xs task ~restore:true domid [vgpu] vcpus Profile.Qemu_trad
+    start_vgpu ~xs task ~restore:true domid [vgpu] vcpus profile
 
   let suspend_varstored (task: Xenops_task.task_handle) ~xs domid =
     debug "Called Dm.suspend_varstored (domid=%d)" domid;
