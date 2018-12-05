@@ -1966,8 +1966,7 @@ module Dm_Common = struct
     let stop_varstored () =
       Varstored.stop ~xs domid;
       let dbg = Printf.sprintf "stop domid %d" domid in
-      let (_:string list) = Xenops_sandbox.Varstore_guard.stop dbg ~domid ~paths:[] in
-      ()
+      Xenops_sandbox.Varstore_guard.stop dbg ~domid
     in
     stop_vgpu ();
     stop_varstored ();
@@ -3107,8 +3106,7 @@ module Dm = struct
   let suspend_varstored (task: Xenops_task.task_handle) ~xs domid =
     debug "Called Dm.suspend_varstored (domid=%d)" domid;
     Varstored.stop ~xs domid;
-    let dbg = Xenops_task.get_dbg task in
-    Xenops_sandbox.Varstore_guard.stop dbg ~domid ~paths:[efivars_save_path] |> List.hd
+    Xenops_sandbox.Varstore_guard.read ~domid efivars_save_path
 
   let restore_varstored (task: Xenops_task.task_handle) ~xs ~efivars domid =
     debug "Called Dm.restore_varstored (domid=%d)" domid;

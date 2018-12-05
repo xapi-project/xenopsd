@@ -119,17 +119,16 @@ module Varstore_guard = struct
     Chroot.prepare chroot path;
     Chroot.absolute_path_outside (varstored_chroot ~domid) path
 
-  let stop dbg ~domid ~paths =
+  let read ~domid path =
+    let chroot = varstored_chroot ~domid in
+    path |> Chroot.absolute_path_outside chroot |> Xenops_utils.Unixext.string_of_file
+
+  let stop dbg ~domid =
       let chroot = varstored_chroot ~domid in
       if Sys.file_exists chroot.root then
-        let read_file relative =
-          relative |> Chroot.absolute_path_outside chroot |> Xenops_utils.Unixext.string_of_file in
         let gid = (varstored_chroot ~domid).Chroot.gid in
         let absolute_socket_path = Chroot.absolute_path_outside chroot socket_path in
-        let files = paths |> List.map read_file in
         Xenops_utils.best_effort "Stop listening on deprivileged socket" (fun () ->
             Varstore_privileged_client.Client.destroy dbg gid absolute_socket_path);
-        Chroot.destroy @@ varstored_chroot ~domid;
-        files
-      else []
+        Chroot.destroy @@ varstored_chroot ~domid
 end
