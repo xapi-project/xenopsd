@@ -117,7 +117,7 @@ module Varstore_guard = struct
     let chroot = varstored_chroot ~domid in
     Chroot.create chroot;
     Chroot.prepare chroot path;
-    Chroot.absolute_path_outside (varstored_chroot ~domid) path
+    Chroot.absolute_path_outside chroot path
 
   let read ~domid path =
     let chroot = varstored_chroot ~domid in
@@ -126,9 +126,9 @@ module Varstore_guard = struct
   let stop dbg ~domid =
       let chroot = varstored_chroot ~domid in
       if Sys.file_exists chroot.root then
-        let gid = (varstored_chroot ~domid).Chroot.gid in
+        let gid = chroot.Chroot.gid in
         let absolute_socket_path = Chroot.absolute_path_outside chroot socket_path in
         Xenops_utils.best_effort "Stop listening on deprivileged socket" (fun () ->
             Varstore_privileged_client.Client.destroy dbg gid absolute_socket_path);
-        Chroot.destroy @@ varstored_chroot ~domid
+        Chroot.destroy chroot
 end
