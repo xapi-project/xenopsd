@@ -29,14 +29,12 @@ module Chroot : sig
   (** [chroot_path_inside path] returns the path when inside the chroot *)
   val chroot_path_inside : Path.t -> string
 
-  (** [prepare chroot path] ensures that [path] is owned by the chrooted daemon and rw- *)
-  val prepare : t -> Path.t -> unit
-
   (** [of_domid daemon domid] describes a chroot for specified daemon and domain *)
   val of_domid : daemon:string -> domid:int -> t
 
-  (** [create chroot] Creates the specified chroot with appropriate permissions *)
-  val create : t -> unit
+  (** [create chroot paths] Creates the specified chroot with appropriate permissions,
+   * and ensures that all [paths] are owned by the chrooted daemon and rw- *)
+  val create : t -> Path.t list -> unit
 
   (** [destroy chroot] Deletes the chroot *)
   val destroy: t -> unit
@@ -60,11 +58,6 @@ end = struct
 
   let chroot_path_inside path = Filename.concat "/" path
 
-  let prepare chroot path =
-    let fullpath = absolute_path_outside chroot path in
-    Xenops_utils.Unixext.with_file fullpath [Unix.O_CREAT; Unix.O_EXCL] 0o600 (fun fd ->
-        Unix.fchown fd chroot.uid chroot.gid)
-
   let qemu_base_uid () = (Unix.getpwnam "qemu_base").Unix.pw_uid
   let qemu_base_gid () = (Unix.getpwnam "qemu_base").Unix.pw_gid
 
@@ -75,14 +68,20 @@ end = struct
     let gid = qemu_base_gid () + domid in
     { root; uid; gid }
 
-  let create chroot =
+  let create chroot paths =
     try
       Xenops_utils.Unixext.mkdir_rec chroot.root 0o755;
       (* we want parent dir to be 0o755 and this dir 0o750 *)
       Unix.chmod chroot.root 0o750;
       (* the chrooted daemon will have r-x permissions *)
       Unix.chown chroot.root 0 chroot.gid;
-      D.debug "Created chroot %s" chroot.root
+      D.debug "Created chroot %s" chroot.root;
+      let prepare path =
+        let fullpath = absolute_path_outside chroot path in
+        Xenops_utils.Unixext.with_file fullpath [Unix.O_CREAT; Unix.O_EXCL] 0o600 (fun fd ->
+            Unix.fchown fd chroot.uid chroot.gid)
+      in
+      List.iter prepare paths
     with e ->
       Backtrace.is_important e;
       D.warn "Failed to create chroot at %s for UID %d: %s" chroot.root chroot.uid
@@ -103,11 +102,10 @@ module Varstore_guard = struct
    * Also creates empty files specified in [paths] owned by [domid] user.*)
   let start dbg ~vm_uuid ~domid ~paths =
     let chroot = varstored_chroot ~domid in
-    Chroot.create chroot;
+    Chroot.create chroot paths;
     let absolute_socket_path = Chroot.absolute_path_outside chroot socket_path in
     let vm_uuidm = match Uuidm.of_string vm_uuid with Some uuid -> uuid | None ->
      failwith (Printf.sprintf "Invalid VM uuid %s" vm_uuid) in
-    List.iter (Chroot.prepare chroot) paths;
     Varstore_privileged_client.Client.create dbg vm_uuidm chroot.gid absolute_socket_path;
     chroot, Chroot.chroot_path_inside socket_path
 
@@ -115,8 +113,7 @@ module Varstore_guard = struct
  * and returns the absolute path to it outside the chroot *)
   let prepare ~domid path =
     let chroot = varstored_chroot ~domid in
-    Chroot.create chroot;
-    Chroot.prepare chroot path;
+    Chroot.create chroot [path];
     Chroot.absolute_path_outside chroot path
 
   let read ~domid path =
