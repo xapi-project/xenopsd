@@ -42,7 +42,7 @@ let create ~xc ~xs domid =
     Domain.has_vendor_device = false;
     Domain.is_uefi = false;
   } in
-  let stubdom_domid = Domain.make ~xc ~xs info 1 Domain.(X86 { emulation_flags = [] }) stubdom_uuid in
+  let stubdom_domid = Domain.make ~xc ~xs info 1 Domain.(X86 { emulation_flags = [] }) stubdom_uuid None in
   debug "jjd27: created stubdom with domid %d" stubdom_domid;
 
   Domain.set_machine_address_size ~xc stubdom_domid (Some 32);
