@@ -84,9 +84,9 @@ type atomic =
   | VM_remove of Vm.id
   | PCI_plug of Pci.id
   | PCI_unplug of Pci.id
-  | VGPU_set_active of Vgpu.id * bool
   | VUSB_plug of Vusb.id
   | VUSB_unplug of Vusb.id
+  | VGPU_set_active of Vgpu.id * bool
   | VGPU_start of (Vgpu.id * bool)
   | VM_set_xsdata of (Vm.id * (string * string) list)
   | VM_set_vcpus of (Vm.id * int)
@@ -915,8 +915,8 @@ let rec atomics_of_operation = function
            (VIF_DB.vifs id)
         ) @ simplify (List.map (fun vif -> VIF_plug vif.Vif.id)
                         (VIF_DB.vifs id |> vif_plug_order)
-                     ) @ simplify (List.map (fun vgpu -> VGPU_set_active (vgpu.Vgpu.id, true))
-                                     (VGPU_DB.vgpus id)
+    ) @ simplify (List.map (fun vgpu -> VGPU_set_active (vgpu.Vgpu.id, true))
+                    (VGPU_DB.vgpus id)
                                   ) @ simplify [
       (* Unfortunately this has to be done after the vbd,vif
          devices have been created since qemu reads xenstore keys
@@ -982,6 +982,8 @@ let rec atomics_of_operation = function
     (if restore_vifs
      then atomics_of_operation (VM_restore_vifs id)
      else []
+    ) @ (List.map (fun vgpu -> VGPU_set_active (vgpu.Vgpu.id, true))
+           (VGPU_DB.vgpus id)
     ) @ simplify [
       (* Unfortunately this has to be done after the devices have been created since
          			   qemu reads xenstore keys in preference to its own commandline. After this is
@@ -1251,10 +1253,6 @@ let rec perform_atomic ~progress_callback ?subtask:_ ?result (op: atomic) (t: Xe
         VBD_DB.signal id
       | _ -> raise (Xenopsd_error (Bad_power_state(power, Running)))
     end
-  | VGPU_set_active (id, b) ->
-    debug "VGPU set_active %s %b" (VGPU_DB.string_of_id id) b;
-    B.VGPU.set_active t (VGPU_DB.vm_of id) (VGPU_DB.read_exn id) b;
-    VGPU_DB.signal id
   | VM_remove id ->
     debug "VM.remove %s" id;
     let vm_t = VM_DB.read_exn id in
@@ -1316,6 +1314,10 @@ let rec perform_atomic ~progress_callback ?subtask:_ ?result (op: atomic) (t: Xe
       (fun () ->
          B.VUSB.unplug t (VUSB_DB.vm_of id) (VUSB_DB.read_exn id);
       ) (fun () -> VUSB_DB.signal id)
+  | VGPU_set_active (id, b) ->
+    debug "VGPU set_active %s %b" (VGPU_DB.string_of_id id) b;
+    B.VGPU.set_active t (VGPU_DB.vm_of id) (VGPU_DB.read_exn id) b;
+    VGPU_DB.signal id
   | VGPU_start (id, saved_state) ->
     debug "VGPU.start %s" (VGPU_DB.string_of_id id);
     B.VGPU.start t (VGPU_DB.vm_of id) (VGPU_DB.read_exn id) saved_state
@@ -1565,13 +1567,11 @@ and trigger_cleanup_after_failure_atom op t =
   | PCI_unplug id ->
     immediate_operation dbg (fst id) (PCI_check_state id)
 
-  (* If VGPU_set_active fails, we will not do any cleanup action *)
-  | VGPU_set_active (id, _) -> ()
-
   | VUSB_plug id
   | VUSB_unplug id ->
     immediate_operation dbg (fst id) (VUSB_check_state id)
 
+  | VGPU_set_active (id, _)
   | VGPU_start (id, _) ->
     immediate_operation dbg (fst id) (VM_check_state (VGPU_DB.vm_of id))
 

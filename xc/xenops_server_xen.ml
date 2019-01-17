@@ -2275,7 +2275,7 @@ module VGPU = struct
     try
       set_active_device (active_path vm vgpu) active
     with e ->
-      debug "set_active %s.%s <- %b failed: %s" (fst vgpu.Vgpu.id) (snd vgpu.Vgpu.id) active (Printexc.to_string e)
+      debug "VGPU.set_active %s.%s <- %b failed: %s" (fst vgpu.Vgpu.id) (snd vgpu.Vgpu.id) active (Printexc.to_string e)
 
   let get_active vm vgpu =
     try
