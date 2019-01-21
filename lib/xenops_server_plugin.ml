@@ -138,6 +138,7 @@ module type S = sig
 		val get_device_action_request: Vm.id -> Vif.t -> device_action_request option
 	end
 	module VGPU : sig
+		val set_active: Xenops_task.t -> Vm.id -> Vgpu.t -> bool -> unit
 		val get_state: Vm.id -> Vgpu.t -> Vgpu.state
 	end
 	module UPDATES : sig

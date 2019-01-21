@@ -408,6 +408,7 @@ module PCI = struct
 end
 
 module VGPU = struct
+	let set_active _ (vm: Vm.id) (vgpu: Vgpu.t) (b: bool) = ()
 	let get_state vm vgpu = Mutex.execute m (vgpu_state vm vgpu)
 end
 
