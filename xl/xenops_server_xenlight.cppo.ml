@@ -681,6 +681,8 @@ end
 module VGPU = struct
 	let id_of vgpu = failwith "Not implemented"
 
+	let set_active task vm vgpu active = failwith "Not implemented"
+
 	let get_state vm vgpu = failwith "Not implemented"
 end
 

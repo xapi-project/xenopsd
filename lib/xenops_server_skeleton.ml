@@ -112,6 +112,7 @@ module VIF = struct
 	let get_device_action_request _ _ = None
 end
 module VGPU = struct
+	let set_active _ _ _ _ = ()
 	let get_state _ _ = unplugged_vgpu
 end
 module UPDATES  = struct
