@@ -148,9 +148,9 @@ module Qemu = struct
 				let path = Filename.concat qmp_dir uuid in
 				try
 					let c = Qmp_protocol.connect path in
-					Qmp_protocol.negotiate c;
 					Hashtbl.replace qmp_to_uuid c uuid;
 					Hashtbl.replace uuid_to_qmp uuid c;
+					Qmp_protocol.negotiate c;
 					debug "QMP %s: negotiation complete" uuid
 				with e ->
 					info "QMP %s: negotiation failed (%s): removing socket" uuid (Printexc.to_string e);
