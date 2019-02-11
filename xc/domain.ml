@@ -243,11 +243,22 @@ let make ~xc ~xs vm_info uuid =
 				) dirs in
 
 			let device_dirs = ["device"; "device/vbd"; "device/vif"] in
+			let device_dirs' =
+				let xsi_254 =
+					try
+						List.assoc "netscaler" vm_info.platformdata = "XSI-254"
+					with Not_found -> false in
+				if xsi_254 then [] else device_dirs
+			in
 
-			(* create read/write nodes for the guest to use *)
+				(* create read/write nodes for the guest to use. XSI-254:
+				 * disable creation of empty device entries in the domain
+				 * hierarchy upon request. Always create them in the xenops
+				 * hierarchy
+				 *)
 			mksubdirs
 				dom_path
-				(device_dirs @ [
+					(device_dirs' @ [
 					"feature";
 					"error";
 					"drivers";
