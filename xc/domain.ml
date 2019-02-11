@@ -302,7 +302,7 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid =
             try
               List.assoc "netscaler" vm_info.platformdata = "XSI-254"
             with Not_found -> false in
-          if xsi_254 then device_dirs else []
+          if xsi_254 then [] else device_dirs
         in
 
         (* create read/write nodes for the guest to use. XSI-254:
