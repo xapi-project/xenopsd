@@ -1134,18 +1134,18 @@ module PCI = struct
     (* Sort into the order the devices were plugged *)
     List.sort (fun a b -> compare (fst a) (fst b)) pairs
 
-  let _pci_add ~xc ~xs domid (pcidev, bdf) =
+  let _pci_add ~xc ~xs domid (host, guest) =
     let open Xenops_interface.Pci in
     let sysfs_pci_dev = "/sys/bus/pci/devices/" in
     if (Qemu.is_running ~xs domid) then
       begin
         let _qmp_result = qmp_send_cmd domid
             (Qmp.Device_add {driver="xen-pci-passthrough";
-                             device=Qmp.Device.PCI({id=string_of_address pcidev;
-                                                    dev=bdf.dev; fn=bdf.fn;
-                                                    hostaddr=string_of_address pcidev;
+                             device=Qmp.Device.PCI({id=string_of_address host;
+                                                    dev=guest.dev; fn=guest.fn;
+                                                    hostaddr=string_of_address host;
                                                     permissive=false})}) in
-        let addresses = (sysfs_pci_dev ^ (string_of_address bdf) ^ "/resource")
+        let addresses = (sysfs_pci_dev ^ (string_of_address guest) ^ "/resource")
                         |> Unixext.string_of_file
                         |> String.split_on_char '\n'
         in
@@ -1161,14 +1161,14 @@ module PCI = struct
                 )
           )
           addresses;
-        (sysfs_pci_dev ^ (Pci.string_of_address bdf))
+        (sysfs_pci_dev ^ (Pci.string_of_address guest))
         |> Unixext.string_of_file
         |> Int64.of_string
         |> Xenctrlext.physdev_map_pirq xc domid
         |> fun x -> Xenctrl.domain_irq_permission xc domid x true
       end
     else
-      raise (Domain_not_running (pcidev, domid))
+      raise (Domain_not_running (host, domid))
 
 
   let add ~xc ~xs pcidevs domid =
@@ -1183,7 +1183,7 @@ module PCI = struct
              (Printf.sprintf "%s/dev-%s" (device_model_pci_device_path xs 0 domid) (string_of_int dev))
              (Pci.string_of_address pcidev))
         pcidevs
-    with exn -> raise (Cannot_add ((List.rev_map (fun (a,_) -> a) pcidevs), exn))
+    with exn -> raise (Cannot_add ((List.map fst pcidevs), exn))
 
   let release pcidevs domid =
     release_xl pcidevs domid

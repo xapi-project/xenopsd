@@ -196,14 +196,14 @@ CAMLprim value stub_xenctrlext_domain_set_target(value xch,
 }
 
 CAMLprim value stub_xenctrlext_physdev_map_pirq(value xch,
-                     value domid,
-                     value irq)
+        value domid,
+        value irq)
 {
     CAMLparam3(xch, domid, irq);
     int pirq = Int_val(irq);
-	caml_enter_blocking_section();
+    caml_enter_blocking_section();
     int retval = xc_physdev_map_pirq(_H(xch), _D(domid), irq, &pirq);
-	caml_leave_blocking_section();
+    caml_leave_blocking_section();
     if (retval)
         failwith_xc(_H(xch));
     CAMLreturn(Val_int(pirq));
