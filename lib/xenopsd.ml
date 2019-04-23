@@ -26,7 +26,7 @@ let persist = ref true
 let worker_pool_size = ref 4
 
 let run_hotplug_scripts = ref true
-let use_old_pci_add = ref true
+let use_old_pci_add = ref false
 let hotplug_timeout = ref 300.
 let qemu_dm_ready_timeout = ref 300.
 let vgpu_ready_timeout = ref 30.
