@@ -1100,6 +1100,7 @@ module PCI = struct
   (* same as libxl_internal: PCI_BAR_IO *)
   let _pci_bar_io = 0x01L
   let _page_size = 4096n
+  let _xen_domctl_dev_rdm_relaxed = 1
 
   (* XXX: we don't want to use the 'xl' command here because the "interface"
      isn't considered as stable as the C API *)
@@ -1147,6 +1148,12 @@ module PCI = struct
     (* Sort into the order the devices were plugged *)
     List.sort (fun a b -> compare (fst a) (fst b)) pairs
 
+  let encode_bdf pci =
+    (pci.Xenops_interface.Pci.domain lsl 16)
+    lor ((pci.bus land 0xff) lsl 8)
+    lor ((pci.dev land 0x1f) lsl 3)
+    lor (pci.fn  land 0x7)
+
   let _pci_add ~xc ~xs domid (host, guest) =
     let open Xenops_interface.Pci in
     let sysfs_pci_dev = "/sys/bus/pci/devices/" in
@@ -1180,9 +1187,11 @@ module PCI = struct
         let irq = (sysfs_pci_dev ^ (Pci.string_of_address host) ^ "/irq")
                   |> Unixext.string_of_file |> String.trim
                   |> int_of_string in
-        if irq > 0 then
+        if irq > 0 then begin
           Xenctrlext.physdev_map_pirq xc domid irq
           |> fun x -> Xenctrl.domain_irq_permission xc domid x true
+        end;
+        Xenctrlext.assign_device xc domid (encode_bdf host) _xen_domctl_dev_rdm_relaxed
       end
     else
       raise (Domain_not_running (host, domid))
