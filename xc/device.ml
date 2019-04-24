@@ -1152,9 +1152,10 @@ module PCI = struct
     let sysfs_pci_dev = "/sys/bus/pci/devices/" in
     if (Qemu.is_running ~xs domid) then
       begin
+        let id = Printf.sprintf "pci-pt-%02x_%02x.%01x" host.bus host.dev host.fn in
         let _qmp_result = qmp_send_cmd domid
             (Qmp.Device_add {driver="xen-pci-passthrough";
-                             device=Qmp.Device.PCI({id=string_of_address host;
+                             device=Qmp.Device.PCI({id;
                                                     dev=guest.dev; fn=guest.fn;
                                                     hostaddr=string_of_address host;
                                                     permissive=false})}) in
