@@ -1158,7 +1158,7 @@ module PCI = struct
                                                     dev=guest.dev; fn=guest.fn;
                                                     hostaddr=string_of_address host;
                                                     permissive=false})}) in
-        let addresses = (sysfs_pci_dev ^ (string_of_address guest) ^ "/resource")
+        let addresses = (sysfs_pci_dev ^ (string_of_address host) ^ "/resource")
                         |> Unixext.string_of_file
                         |> String.split_on_char '\n'
         in
@@ -1174,7 +1174,7 @@ module PCI = struct
                 )
           )
           addresses;
-        (sysfs_pci_dev ^ (Pci.string_of_address guest))
+        (sysfs_pci_dev ^ (Pci.string_of_address host))
         |> Unixext.string_of_file
         |> Int64.of_string
         |> Xenctrlext.physdev_map_pirq xc domid
