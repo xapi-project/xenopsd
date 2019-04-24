@@ -1079,7 +1079,20 @@ module PCI = struct
 
   exception Domain_not_running of Xenops_interface.Pci.address * int
   exception Cannot_add of Xenops_interface.Pci.address list * exn (* devices, reason *)
-  exception Cannot_use_pci_with_no_pciback of t list
+
+  let () =
+    Printexc.register_printer (function
+        | Domain_not_running (addr, domid) ->
+          Some (Printf.sprintf "Domain_not_running(inserting pci=%s,domid=%d)"
+                  (Xenops_interface.Pci.string_of_address addr) domid)
+        | Cannot_add (devices, e) ->
+          let addrs = devices |> List.map Xenops_interface.Pci.string_of_address
+                      |> String.concat ";" in
+          Some (Printf.sprintf "Cannot_add(%s, %s)" addrs (Printexc.to_string e))
+        | Ioemu_failed(name, msg) ->
+          Some (Printf.sprintf "Ioemu_failed(%s, %s)" name msg)
+        | _ -> None)
+
 
   (* From https://github.com/torvalds/linux/blob/v4.19/include/linux/pci.h#L76-L102 *)
   (* same as libxl_internal: PROC_PCI_NUM_RESOURCES *)
@@ -1183,7 +1196,10 @@ module PCI = struct
              (Printf.sprintf "%s/dev-%s" (device_model_pci_device_path xs 0 domid) (string_of_int dev))
              (Pci.string_of_address pcidev))
         pcidevs
-    with exn -> raise (Cannot_add ((List.map fst pcidevs), exn))
+    with exn ->
+      Backtrace.is_important exn;
+      Debug.log_backtrace exn (Backtrace.get exn);
+      Backtrace.reraise exn (Cannot_add ((List.map fst pcidevs), exn))
 
   let release pcidevs domid =
     release_xl pcidevs domid
