@@ -202,7 +202,7 @@ CAMLprim value stub_xenctrlext_physdev_map_pirq(value xch,
     CAMLparam3(xch, domid, irq);
     int pirq = Int_val(irq);
     caml_enter_blocking_section();
-    int retval = xc_physdev_map_pirq(_H(xch), _D(domid), irq, &pirq);
+    int retval = xc_physdev_map_pirq(_H(xch), _D(domid), pirq, &pirq);
     caml_leave_blocking_section();
     if (retval)
         failwith_xc(_H(xch));

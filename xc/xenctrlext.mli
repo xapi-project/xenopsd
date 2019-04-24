@@ -41,4 +41,4 @@ external get_max_nr_cpus: handle -> int = "stub_xenctrlext_get_max_nr_cpus"
 
 external domain_set_target: handle -> domid -> domid -> unit = "stub_xenctrlext_domain_set_target"
 
-external physdev_map_pirq : handle -> domid -> int64 -> int = "stub_xenctrlext_physdev_map_pirq"
+external physdev_map_pirq : handle -> domid -> int -> int = "stub_xenctrlext_physdev_map_pirq"

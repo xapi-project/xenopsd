@@ -1176,11 +1176,12 @@ module PCI = struct
                 )
           )
           addresses;
-        (sysfs_pci_dev ^ (Pci.string_of_address host))
-        |> Unixext.string_of_file
-        |> Int64.of_string
-        |> Xenctrlext.physdev_map_pirq xc domid
-        |> fun x -> Xenctrl.domain_irq_permission xc domid x true
+        let irq = (sysfs_pci_dev ^ (Pci.string_of_address host) ^ "/irq")
+                  |> Unixext.string_of_file |> String.trim
+                  |> int_of_string in
+        if irq > 0 then
+          Xenctrlext.physdev_map_pirq xc domid irq
+          |> fun x -> Xenctrl.domain_irq_permission xc domid x true
       end
     else
       raise (Domain_not_running (host, domid))
