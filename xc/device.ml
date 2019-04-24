@@ -1098,7 +1098,7 @@ module PCI = struct
   (* same as libxl_internal: PROC_PCI_NUM_RESOURCES *)
   let _proc_pci_num_resources = 7
   (* same as libxl_internal: PCI_BAR_IO *)
-  let _pci_bar_io = 0x01L
+  let _pci_bar_io = 0x01n
   let _page_size = 4096n
   let _xen_domctl_dev_rdm_relaxed = 1
 
@@ -1175,12 +1175,14 @@ module PCI = struct
               Scanf.sscanf addr "0x%nx 0x%nx 0x%nx" (fun scan_start scan_end scan_flags ->
                   if scan_start <> 0n then
                     let scan_size = Nativeint.(sub scan_end scan_start |> succ) in
-                    let scan_start = if scan_flags <> 0n then scan_start else
-                        Nativeint.(shift_right_logical scan_start 12) in
-                    let scan_size = if scan_size <> 0n then scan_size else
-                        Nativeint.(shift_right_logical (add _page_size scan_size |> pred) 12) in
-                    Xenctrl.domain_iomem_permission xc domid
-                      scan_start scan_size true
+                    if Nativeint.(logand scan_flags _pci_bar_io > 0n) then begin
+                      Xenctrl.domain_ioport_permission xc domid (Nativeint.to_int scan_start)
+                        (Nativeint.to_int scan_size) true
+                    end else begin
+                      let scan_start = Nativeint.(shift_right_logical scan_start 12) in
+                      let scan_size = Nativeint.(shift_right_logical (add _page_size scan_size |> pred) 12) in
+                      Xenctrl.domain_iomem_permission xc domid scan_start scan_size true
+                    end
                 )
           )
           addresses;
