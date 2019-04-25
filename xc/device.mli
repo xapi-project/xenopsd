@@ -199,7 +199,7 @@ sig
     | Pciback
 
 
-  val add : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> (Xenops_interface.Pci.address * int) list -> Xenctrl.domid -> unit
+  val add : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> hvm:bool -> (Xenops_interface.Pci.address * int) list -> Xenctrl.domid -> unit
   val release : address list -> Xenctrl.domid -> unit
   val reset : xs:Xenstore.Xs.xsh -> address -> unit
   val bind : address list -> supported_driver -> unit

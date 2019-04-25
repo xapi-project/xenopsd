@@ -1154,61 +1154,64 @@ module PCI = struct
     lor ((pci.dev land 0x1f) lsl 3)
     lor (pci.fn  land 0x7)
 
-  let _pci_add ~xc ~xs domid (host, guest) =
+  let _pci_add ~xc ~xs ~hvm domid (host, guest) =
     let open Xenops_interface.Pci in
     let sysfs_pci_dev = "/sys/bus/pci/devices/" in
-    if (Qemu.is_running ~xs domid) then
-      begin
-        let id = Printf.sprintf "pci-pt-%02x_%02x.%01x" host.bus host.dev host.fn in
-        let _qmp_result = qmp_send_cmd domid
-            (Qmp.Device_add {driver="xen-pci-passthrough";
-                             device=Qmp.Device.PCI({id;
-                                                    dev=guest.dev; fn=guest.fn;
-                                                    hostaddr=string_of_address host;
-                                                    permissive=false})}) in
-        let addresses = (sysfs_pci_dev ^ (string_of_address host) ^ "/resource")
-                        |> Unixext.string_of_file
-                        |> String.split_on_char '\n'
-        in
-        List.iteri (fun i addr ->
-            if i < _proc_pci_num_resources then
-              Scanf.sscanf addr "0x%nx 0x%nx 0x%nx" (fun scan_start scan_end scan_flags ->
-                  if scan_start <> 0n then
-                    let scan_size = Nativeint.(sub scan_end scan_start |> succ) in
-                    if Nativeint.(logand scan_flags _pci_bar_io > 0n) then begin
-                      Xenctrl.domain_ioport_permission xc domid (Nativeint.to_int scan_start)
-                        (Nativeint.to_int scan_size) true
-                    end else begin
-                      let scan_start = Nativeint.(shift_right_logical scan_start 12) in
-                      let scan_size = Nativeint.(shift_right_logical (add _page_size scan_size |> pred) 12) in
-                      Xenctrl.domain_iomem_permission xc domid scan_start scan_size true
-                    end
-                )
-          )
-          addresses;
-        let irq = (sysfs_pci_dev ^ (Pci.string_of_address host) ^ "/irq")
-                  |> Unixext.string_of_file |> String.trim
-                  |> int_of_string in
-        if irq > 0 then begin
-          Xenctrlext.physdev_map_pirq xc domid irq
-          |> fun x -> Xenctrl.domain_irq_permission xc domid x true
-        end;
-        Xenctrlext.assign_device xc domid (encode_bdf host) _xen_domctl_dev_rdm_relaxed
-      end
-    else
-      raise (Domain_not_running (host, domid))
+    if hvm then begin
+      if (Qemu.is_running ~xs domid) then
+        begin
+          let id = Printf.sprintf "pci-pt-%02x_%02x.%01x" host.bus host.dev host.fn in
+          let _qmp_result = qmp_send_cmd domid
+              (Qmp.Device_add {driver="xen-pci-passthrough";
+                               device=Qmp.Device.PCI({id;
+                                                      dev=guest.dev; fn=guest.fn;
+                                                      hostaddr=string_of_address host;
+                                                      permissive=false})}) in
+          ()
+        end
+      else
+        raise (Domain_not_running (host, domid));
+    end;
+    let addresses = (sysfs_pci_dev ^ (string_of_address host) ^ "/resource")
+                    |> Unixext.string_of_file
+                    |> String.split_on_char '\n'
+    in
+    List.iteri (fun i addr ->
+        if i < _proc_pci_num_resources then
+          Scanf.sscanf addr "0x%nx 0x%nx 0x%nx" (fun scan_start scan_end scan_flags ->
+              if scan_start <> 0n then
+                let scan_size = Nativeint.(sub scan_end scan_start |> succ) in
+                if Nativeint.(logand scan_flags _pci_bar_io > 0n) then begin
+                  Xenctrl.domain_ioport_permission xc domid (Nativeint.to_int scan_start)
+                    (Nativeint.to_int scan_size) true
+                end else begin
+                  let scan_start = Nativeint.(shift_right_logical scan_start 12) in
+                  let scan_size = Nativeint.(shift_right_logical (add _page_size scan_size |> pred) 12) in
+                  Xenctrl.domain_iomem_permission xc domid scan_start scan_size true
+                end
+            )
+      )
+      addresses;
+    let irq = (sysfs_pci_dev ^ (Pci.string_of_address host) ^ "/irq")
+              |> Unixext.string_of_file |> String.trim
+              |> int_of_string in
+    if irq > 0 then begin
+      Xenctrlext.physdev_map_pirq xc domid irq
+      |> fun x -> Xenctrl.domain_irq_permission xc domid x true
+    end;
+    Xenctrlext.assign_device xc domid (encode_bdf host) _xen_domctl_dev_rdm_relaxed
 
 
-  let add ~xc ~xs pcidevs domid =
+  let add ~xc ~xs ~hvm pcidevs domid =
     try
       if !Xenopsd.use_old_pci_add then
         add_xl (List.map (fun (a,_) -> a) pcidevs) domid
       else
-        List.iter (fun (pcidev, dev) -> _pci_add ~xc ~xs domid (pcidev, Pci.{domain=0; bus=0; dev=dev; fn=0})) pcidevs;
+        List.iter (fun (pcidev, dev) -> _pci_add ~xc ~xs ~hvm domid (pcidev, Pci.{domain=0; bus=0; dev=dev; fn=0})) pcidevs;
       List.iter
         (fun (pcidev, dev) ->
            xs.Xs.write
-             (Printf.sprintf "%s/dev-%s" (device_model_pci_device_path xs 0 domid) (string_of_int dev))
+             (Printf.sprintf "%s/dev-%d" (device_model_pci_device_path xs 0 domid) dev)
              (Pci.string_of_address pcidev))
         pcidevs
     with exn ->

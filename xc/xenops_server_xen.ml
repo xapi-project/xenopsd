@@ -2230,7 +2230,7 @@ module PCI = struct
 
   let plug task vm pci =
     on_frontend
-      (fun xc xs frontend_domid _ ->
+      (fun xc xs frontend_domid domain_type ->
          (* Make sure the backend defaults are set *)
          let vm_t = DB.read_exn vm in
          let persistent = vm_t.VmExtra.persistent in
@@ -2246,8 +2246,9 @@ module PCI = struct
            raise (Xenopsd_error PCIBack_not_loaded);
          end;
 
+         let hvm = domain_type == Vm.Domain_HVM in
          Device.PCI.bind [ pci.address ] Device.PCI.Pciback;
-         Device.PCI.add ~xc ~xs [ (pci.address, get_next_pci_index ~xs frontend_domid) ] frontend_domid
+         Device.PCI.add ~xc ~xs ~hvm [ (pci.address, get_next_pci_index ~xs frontend_domid) ] frontend_domid
       ) vm
 
   let unplug task vm pci =
