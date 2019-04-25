@@ -2223,7 +2223,7 @@ module PCI = struct
   let get_next_pci_index ~xs domid =
     let current = Device.PCI.list ~xs domid in
     let max_idx = function
-      | [] -> failwith "PCI dir list was empty - this is not expected"
+      | [] -> -1
       | x::xs -> List.fold_left max x xs
     in
     1 + max_idx (List.map fst current)
