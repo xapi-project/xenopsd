@@ -256,6 +256,7 @@ sig
     pci_emulations: string list;
     pci_passthrough: bool;
     video_mib: int;
+    xen_platform: (int * int) option;
     extras: (string * string option) list;
   }
 
