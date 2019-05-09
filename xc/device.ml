@@ -1154,9 +1154,10 @@ module PCI = struct
     lor ((pci.dev land 0x1f) lsl 3)
     lor (pci.fn  land 0x7)
 
-  let _pci_add ~xc ~xs ~hvm domid (host, guest) =
+  let _pci_add ~xc ~xs ~hvm domid (host, (_, guest)) =
     let open Xenops_interface.Pci in
     let sysfs_pci_dev = "/sys/bus/pci/devices/" in
+    let devfn = match guest with None -> None | Some g -> Some (g.dev, g.fn) in
     if hvm then begin
       if (Qemu.is_running ~xs domid) then
         begin
@@ -1164,7 +1165,7 @@ module PCI = struct
           let _qmp_result = qmp_send_cmd domid
               (Qmp.Device_add {driver="xen-pci-passthrough";
                                device=Qmp.Device.PCI({id;
-                                                      dev=guest.dev; fn=guest.fn;
+                                                      devfn;
                                                       hostaddr=string_of_address host;
                                                       permissive=false})}) in
           ()
@@ -1207,9 +1208,9 @@ module PCI = struct
       if !Xenopsd.use_old_pci_add then
         add_xl (List.map (fun (a,_) -> a) pcidevs) domid
       else
-        List.iter (fun (pcidev, dev) -> _pci_add ~xc ~xs ~hvm domid (pcidev, Pci.{domain=0; bus=0; dev=dev; fn=0})) pcidevs;
+        List.iter (_pci_add ~xc ~xs ~hvm domid) pcidevs;
       List.iter
-        (fun (pcidev, dev) ->
+        (fun (pcidev, (dev, _)) ->
            xs.Xs.write
              (Printf.sprintf "%s/dev-%d" (device_model_pci_device_path xs 0 domid) dev)
              (Pci.string_of_address pcidev))
@@ -2151,6 +2152,8 @@ module Backend = struct
 
       (** [after_suspend_image xs qemu_domid domid] hook to execute actions after the suspend image has been created *)
       val after_suspend_image: xs:Xenstore.Xs.xsh -> qemu_domid:int -> int -> unit
+
+      val pci_assign_guest: xs:Xenstore.Xs.xsh -> qemu_domid:Xenctrl.domid -> index:int -> host:Pci.address -> Pci.address option
     end
   end
 
@@ -2194,6 +2197,8 @@ module Backend = struct
 
       let after_suspend_image ~xs ~qemu_domid domid = ()
 
+      let pci_assign_guest ~xs ~qemu_domid ~index ~host = None
+
     end (* Backend.Qemu_none.Dm *)
   end (* Backend.Qemu_none *)
 
@@ -2227,6 +2232,10 @@ module Backend = struct
 
     module VGPU: sig
       val device: index:int -> int option
+    end
+
+    module PCI: sig
+      val assign_guest: xs:Xenstore.Xs.xsh -> domid:int -> index:int -> host:Pci.address -> Pci.address option
     end
 
     val extra_qemu_args: nic_type:string -> string list
@@ -2303,6 +2312,11 @@ module Backend = struct
       let supported _ = true
     end
 
+    module PCI = struct
+      (* compat: let qemu deal with it as before *)
+      let assign_guest ~xs ~domid ~index ~host = None
+    end
+
     let name = Profile.Name.qemu_upstream_compat
     let extra_qemu_args ~nic_type =
       let mult xs ys =
@@ -2361,6 +2375,13 @@ module Backend = struct
         let open Xenops_types.Vm in function
         | Bios -> false
         | Uefi _ -> true
+    end
+
+    module PCI = struct
+      let assign_guest ~xs ~domid ~index ~host =
+        (* domain here refers to PCI segment from SBDF,
+         * and not a Xen domain *)
+        Some { Pci.domain = 0; bus = 0; dev = (8 + index); fn = 0 }
     end
 
     let name = Profile.Name.qemu_upstream_uefi
@@ -2900,6 +2921,8 @@ module Backend = struct
         (* device model not needed anymore after suspend image has been created *)
         stop ~xs ~qemu_domid domid
 
+      let pci_assign_guest ~xs ~qemu_domid ~index ~host =
+        DefaultConfig.PCI.assign_guest ~xs ~domid:qemu_domid ~index ~host
     end (* Backend.Qemu_upstream_compat.Dm *)
   end (* Backend.Qemu_upstream *)
 
@@ -2996,6 +3019,11 @@ module Dm = struct
   let after_suspend_image ~xs ~dm ~qemu_domid domid =
     let module Q = (val Backend.of_profile dm) in
     Q.Dm.after_suspend_image ~xs ~qemu_domid domid
+
+
+  let pci_assign_guest ~xs ~dm ~qemu_domid ~index ~host =
+    let module Q = (val Backend.of_profile dm) in
+    Q.Dm.pci_assign_guest ~xs ~qemu_domid ~index ~host
 
   (* the following functions depend on the functions above that use the qemu backend Q *)
 

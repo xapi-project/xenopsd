@@ -2248,7 +2248,9 @@ module PCI = struct
 
          let hvm = domain_type == Vm.Domain_HVM in
          Device.PCI.bind [ pci.address ] Device.PCI.Pciback;
-         Device.PCI.add ~xc ~xs ~hvm [ (pci.address, get_next_pci_index ~xs frontend_domid) ] frontend_domid
+         let index = get_next_pci_index ~xs frontend_domid in
+         let guest_pci = Device.Dm.pci_assign_guest ~xs ~dm:(dm_of vm) ~qemu_domid:frontend_domid ~host:pci.address ~index in
+         Device.PCI.add ~xc ~xs ~hvm [ pci.address, (index, guest_pci) ] frontend_domid
       ) vm
 
   let unplug task vm pci =

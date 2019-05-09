@@ -199,7 +199,7 @@ sig
     | Pciback
 
 
-  val add : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> hvm:bool -> (Xenops_interface.Pci.address * int) list -> Xenctrl.domid -> unit
+  val add : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> hvm:bool -> (Xenops_interface.Pci.address * (int * Xenops_interface.Pci.address option)) list -> Xenctrl.domid -> unit
   val release : address list -> Xenctrl.domid -> unit
   val reset : xs:Xenstore.Xs.xsh -> address -> unit
   val bind : address list -> supported_driver -> unit
@@ -290,6 +290,7 @@ sig
   val restore_varstored: Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> efivars:string -> Xenctrl.domid -> unit
 
   val after_suspend_image: xs:Xenstore.Xs.xsh -> dm:Profile.t -> qemu_domid:int -> int -> unit
+  val pci_assign_guest: xs:Xenstore.Xs.xsh -> dm:Profile.t -> qemu_domid:Xenctrl.domid -> index:int -> host:Xenops_interface.Pci.address -> Xenops_interface.Pci.address option
 end
 
 module Backend: sig
