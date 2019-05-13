@@ -1241,22 +1241,21 @@ module PCI = struct
                     |> Unixext.string_of_file
                     |> String.split_on_char '\n'
     in
-    List.iteri (fun i addr ->
-        if i < _proc_pci_num_resources then
-          Scanf.sscanf addr "0x%nx 0x%nx 0x%nx" (fun scan_start scan_end scan_flags ->
-              if scan_start <> 0n then
-                let scan_size = Nativeint.(sub scan_end scan_start |> succ) in
-                if Nativeint.(logand scan_flags _pci_bar_io > 0n) then begin
-                  Xenctrl.domain_ioport_permission xc domid (Nativeint.to_int scan_start)
-                    (Nativeint.to_int scan_size) true
-                end else begin
-                  let scan_start = Nativeint.(shift_right_logical scan_start 12) in
-                  let scan_size = Nativeint.(shift_right_logical (add _page_size scan_size |> pred) 12) in
-                  Xenctrl.domain_iomem_permission xc domid scan_start scan_size true
-                end
-            )
-      )
-      addresses;
+    let apply_io_permission i addr =
+      if i < _proc_pci_num_resources then
+        Scanf.sscanf addr "0x%nx 0x%nx 0x%nx" @@ fun scan_start scan_end scan_flags ->
+        if scan_start <> 0n then
+          let scan_size = Nativeint.(sub scan_end scan_start |> succ) in
+          if Nativeint.(logand scan_flags _pci_bar_io > 0n) then begin
+            Xenctrl.domain_ioport_permission xc domid (Nativeint.to_int scan_start)
+              (Nativeint.to_int scan_size) true
+          end else begin
+            let scan_start = Nativeint.(shift_right_logical scan_start 12) in
+            let scan_size = Nativeint.(shift_right_logical (add _page_size scan_size |> pred) 12) in
+            Xenctrl.domain_iomem_permission xc domid scan_start scan_size true
+          end
+    in
+    List.iteri apply_io_permission addresses;
     let irq = (sysfs_pci_dev ^ (Pci.string_of_address host) ^ "/irq")
               |> Unixext.string_of_file |> String.trim
               |> int_of_string in
