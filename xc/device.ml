@@ -1222,6 +1222,9 @@ module PCI = struct
     let open Xenops_interface.Pci in
     let sysfs_pci_dev = "/sys/bus/pci/devices/" in
     let devfn = match guest with None -> None | Some g -> Some (g.dev, g.fn) in
+    let irq = (sysfs_pci_dev ^ (Pci.string_of_address host) ^ "/irq")
+              |> Unixext.string_of_file |> String.trim
+              |> int_of_string in
     if hvm then begin
       if (Qemu.is_running ~xs domid) then
         begin
@@ -1256,9 +1259,6 @@ module PCI = struct
           end
     in
     List.iteri apply_io_permission addresses;
-    let irq = (sysfs_pci_dev ^ (Pci.string_of_address host) ^ "/irq")
-              |> Unixext.string_of_file |> String.trim
-              |> int_of_string in
     if irq > 0 then begin
       Xenctrlext.physdev_map_pirq xc domid irq
       |> fun x -> Xenctrl.domain_irq_permission xc domid x true
