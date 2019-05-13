@@ -2318,7 +2318,7 @@ module PCI = struct
            raise (Xenopsd_error PCIBack_not_loaded);
          end;
 
-         let hvm = domain_type == Vm.Domain_HVM in
+         let hvm = domain_type = Vm.Domain_HVM in
          Device.PCI.bind [ pci.address ] Device.PCI.Pciback;
          let index = get_next_pci_index ~xs frontend_domid in
          let guest_pci =
