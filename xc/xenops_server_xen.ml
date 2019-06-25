@@ -1589,20 +1589,20 @@ module VM = struct
             Opt.iter
               (fun stubdom_domid ->
                  Stubdom.build task ~xc ~xs ~dm:qemu_dm ~store_domid ~console_domid info xenguest di.Xenctrl.domid stubdom_domid;
-                 Device.Dm.start_vnconly task ~xs ~dm:qemu_dm info stubdom_domid
+                 Device.Dm.start_vnconly task ~xc ~xs ~dm:qemu_dm info stubdom_domid
               ) (get_stubdom ~xs di.Xenctrl.domid);
           | Vm.HVM { Vm.qemu_stubdom = false } ->
             (if saved_state then Device.Dm.restore else Device.Dm.start)
-              task ~xs ~dm:qemu_dm info di.Xenctrl.domid;
+              task ~xc ~xs ~dm:qemu_dm info di.Xenctrl.domid;
             Device.Serial.update_xenstore ~xs di.Xenctrl.domid
           | Vm.PV _ ->
             Device.Vfb.add ~xc ~xs di.Xenctrl.domid;
             Device.Vkbd.add ~xc ~xs di.Xenctrl.domid;
-            Device.Dm.start_vnconly task ~xs ~dm:qemu_dm info di.Xenctrl.domid
+            Device.Dm.start_vnconly task ~xc ~xs ~dm:qemu_dm info di.Xenctrl.domid
           | Vm.PVinPVH _ ->
             Device.Vfb.add ~xc ~xs di.Xenctrl.domid;
             Device.Vkbd.add ~xc ~xs di.Xenctrl.domid;
-            Device.Dm.start_vnconly task ~xs ~dm:qemu_dm info di.Xenctrl.domid
+            Device.Dm.start_vnconly task ~xc ~xs ~dm:qemu_dm info di.Xenctrl.domid
         ) (create_device_model_config vm vmextra vbds vifs vgpus vusbs);
       match vm.Vm.ty with
       | Vm.PV { vncterm = true; vncterm_ip = ip }
@@ -2203,7 +2203,7 @@ module PCI = struct
          end;
 
          Device.PCI.bind [ pci.address ] Device.PCI.Pciback;
-         Device.PCI.add xs [ pci.address ] frontend_domid
+         Device.PCI.add xc xs [ pci.address ] frontend_domid
       ) vm
 
   let unplug task vm pci =
@@ -2229,7 +2229,7 @@ module VGPU = struct
 
   let start task vm vgpu saved_state =
     on_frontend
-      (fun _ xs frontend_domid _ ->
+      (fun xc xs frontend_domid _ ->
          let vmextra = DB.read_exn vm in
          let vcpus = match vmextra.VmExtra.persistent with
            | { VmExtra.build_info = None } ->
@@ -2238,7 +2238,7 @@ module VGPU = struct
            | { VmExtra.build_info = Some build_info } ->
              build_info.Domain.vcpus
          in
-         Device.Dm.restore_vgpu task ~xs frontend_domid vgpu vcpus
+         Device.Dm.restore_vgpu task ~xc ~xs frontend_domid vgpu vcpus
       ) vm
 
   let get_state vm vgpu =
