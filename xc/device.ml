@@ -1131,10 +1131,35 @@ module PCI = struct
     (* Sort into the order the devices were plugged *)
     List.sort (fun a b -> compare (fst a) (fst b)) pairs
 
-  let add ~xs pcidevs domid =
+  let encode_bdf pci =
+    (pci.Xenops_interface.Pci.domain lsl 16)
+    lor ((pci.bus land 0xff) lsl 8)
+    lor ((pci.dev land 0x1f) lsl 3)
+    lor (pci.fn  land 0x7)
+
+  let _quarantine xc pci quarantine =
+    let pci_bdf = encode_bdf pci in
+    let domid = Xenctrlext.domid_quarantine () in
+    try
+      match quarantine with
+      | true -> Xenctrlext.assign_device xc domid pci_bdf 0; true
+      | false -> Xenctrlext.deassign_device xc domid pci_bdf; true
+    with
+    | Xenctrlext.Unix_error (Unix.ESRCH, _) -> false
+    | Xenctrlext.Unix_error (Unix.ENODEV, _) -> false
+    | e -> raise e
+
+  let quarantine xc pci =
+    _quarantine xc pci true
+
+  let dequarantine xc pci =
+    _quarantine xc pci false
+
+  let add ~xc ~xs pcidevs domid =
     try
       let current = read_pcidir ~xs domid in
       let next_idx = List.fold_left max (-1) (List.map fst current) + 1 in
+      if !Xenopsd.pci_quarantine then List.iter (fun x -> ignore(quarantine xc x)) pcidevs;
       add_xl pcidevs domid;
       List.iteri
         (fun count address ->
@@ -2964,7 +2989,7 @@ module Dm = struct
       ~cancel:(Cancel_utils.Varstored domid) ();
     Forkhelpers.dontwaitpid pid
 
-  let start_vgpu ~xs task ?(restore=false) domid vgpus vcpus profile =
+  let start_vgpu ~xc ~xs task ?(restore=false) domid vgpus vcpus profile =
     let open Xenops_interface.Vgpu in
     match vgpus with
     | [{physical_pci_address = pci; implementation = Nvidia vgpu}] ->
@@ -2977,6 +3002,8 @@ module Dm = struct
            			 * a vGPU on a device which is passed through to a guest. *)
         debug "start_vgpu: got VGPU with physical pci address %s"
           (Xenops_interface.Pci.string_of_address pci);
+        let pcis = List.map (fun x -> x.physical_pci_address) vgpus in
+        if !Xenopsd.pci_quarantine then List.iter (fun x -> ignore(PCI.dequarantine xc x)) pcis;
         PCI.bind [pci] PCI.Nvidia;
         let module Q = (val Backend.of_profile profile) in
         let device = Q.Vgpu.device ~index:0 in
@@ -3006,6 +3033,7 @@ module Dm = struct
         raise (Ioemu_failed ("vgpu", Printf.sprintf "Daemon vgpu returned error: %s" error_code))
       end
     | [{physical_pci_address = pci; implementation = GVT_g vgpu}] ->
+      if !Xenopsd.pci_quarantine then ignore(PCI.dequarantine xc pci);
       PCI.bind [pci] PCI.I915
     | [{physical_pci_address = pci; implementation = MxGPU vgpu}] ->
       Mutex.execute gimtool_m (fun () ->
@@ -3021,7 +3049,7 @@ module Dm = struct
   type action = Start | Restore
 
   let __start (task: Xenops_task.task_handle)
-      ~xs ~dm ?(timeout = !Xenopsd.qemu_dm_ready_timeout) action info domid =
+      ~xc ~xs ~dm ?(timeout = !Xenopsd.qemu_dm_ready_timeout) action info domid =
 
     let args = match action with
       | Start    -> qemu_args ~xs ~dm info false domid
@@ -3035,7 +3063,7 @@ module Dm = struct
     let () = match info.disp with
       | VNC (Vgpu vgpus, _, _, _, _)
       | SDL (Vgpu vgpus, _) ->
-        start_vgpu ~xs task domid vgpus info.vcpus dm
+        start_vgpu ~xc ~xs task domid vgpus info.vcpus dm
       | _ -> ()
     in
 
@@ -3095,15 +3123,15 @@ module Dm = struct
               xs.Xs.write (Qemu.pid_path_signal domid) crash_reason
         ))
 
-  let start (task: Xenops_task.task_handle) ~xs ~dm ?timeout info domid =
-    __start task ~xs ~dm ?timeout Start info domid
+  let start (task: Xenops_task.task_handle) ~xc ~xs ~dm ?timeout info domid =
+    __start task ~xc ~xs ~dm ?timeout Start info domid
 
-  let restore (task: Xenops_task.task_handle) ~xs ~dm ?timeout info domid =
-    __start task ~xs ~dm ?timeout Restore info domid
+  let restore (task: Xenops_task.task_handle) ~xc ~xs ~dm ?timeout info domid =
+    __start task ~xc ~xs ~dm ?timeout Restore info domid
 
-  let restore_vgpu (task: Xenops_task.task_handle) ~xs domid vgpu vcpus profile =
+  let restore_vgpu (task: Xenops_task.task_handle) ~xc ~xs domid vgpu vcpus profile =
     debug "Called Dm.restore_vgpu";
-    start_vgpu ~xs task ~restore:true domid [vgpu] vcpus profile
+    start_vgpu ~xc ~xs task ~restore:true domid [vgpu] vcpus profile
 
   let suspend_varstored (task: Xenops_task.task_handle) ~xs domid =
     debug "Called Dm.suspend_varstored (domid=%d)" domid;

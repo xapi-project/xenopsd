@@ -1643,7 +1643,7 @@ module VM = struct
             debug "Ignoring request for PV VNC in stubdom (would require qemu-trad)"
           | Vm.HVM { Vm.qemu_stubdom = false } ->
             (if saved_state then Device.Dm.restore else Device.Dm.start)
-              task ~xs ~dm:qemu_dm info di.Xenctrl.domid
+              task ~xc ~xs ~dm:qemu_dm info di.Xenctrl.domid
           | Vm.PV _ | Vm.PVinPVH _ -> assert false
         ) (create_device_model_config vm vmextra vbds vifs vgpus vusbs);
       match vm.Vm.ty with
@@ -2302,7 +2302,7 @@ module PCI = struct
          end;
 
          Device.PCI.bind [ pci.address ] Device.PCI.Pciback;
-         Device.PCI.add xs [ pci.address ] frontend_domid
+         Device.PCI.add xc xs [ pci.address ] frontend_domid
       ) vm
 
   let unplug task vm pci =
@@ -2327,7 +2327,7 @@ module VGPU = struct
 
   let start task vm vgpu saved_state =
     on_frontend
-      (fun _ xs frontend_domid _ ->
+      (fun xc xs frontend_domid _ ->
          let vmextra = DB.read_exn vm in
          let vcpus = match vmextra.VmExtra.persistent with
            | { VmExtra.build_info = None } ->
@@ -2339,7 +2339,7 @@ module VGPU = struct
          let profile = match vmextra.VmExtra.persistent.profile with
            | None -> Device.Profile.Qemu_upstream_compat
            | Some p -> p in
-         Device.Dm.restore_vgpu task ~xs frontend_domid vgpu vcpus profile
+         Device.Dm.restore_vgpu task ~xc ~xs frontend_domid vgpu vcpus profile
       ) vm
 
   let active_path vm vgpu = Printf.sprintf "/vm/%s/devices/vgpu/%s" vm (snd vgpu.Vgpu.id)
