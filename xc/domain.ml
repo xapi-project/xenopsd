@@ -1580,6 +1580,7 @@ let move_xstree ~xs domid olduuid newuuid =
   let mv_tree path =
     let open Xenstore in
     Xs.transaction xs (fun t ->
+      try
         let tree = get_tree t path in
         let rec fixup write path (name,node) =
           let fixed_name = Re.replace_string regexp ~by:newuuid name in
@@ -1591,8 +1592,7 @@ let move_xstree ~xs domid olduuid newuuid =
           end;
           if node.contents <> fixed_contents || write || changed_name then begin
             debug "About to write to %s (%s)\n%!" ((String.concat "/" path) ^ "/" ^ fixed_name) fixed_contents;
-            t.Xst.write ((String.concat "/" path) ^ "/" ^ fixed_name)
-              fixed_contents;
+            t.Xst.write ((String.concat "/" path) ^ "/" ^ fixed_name)  fixed_contents;
           end;
           List.iter (fixup (write || changed_name) (path @ [fixed_name])) node.subtrees
         in
@@ -1601,6 +1601,8 @@ let move_xstree ~xs domid olduuid newuuid =
           fixup false (List.rev path') (name,tree)
         | _ ->
           failwith "Internal error: mv_tree called on empty path"
+      with _ ->
+        debug "Execption move tree"
       ) in
 
   List.iter mv_tree search_paths
