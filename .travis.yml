@@ -9,6 +9,7 @@ env:
   global:
     - PACKAGE="xapi-xenopsd"
     - PINS="xapi-xenopsd:."
+    - BASE_REMOTE_BRANCH="REQ-627"
     - BASE_REMOTE="https://github.com/xapi-project/xs-opam.git"
     - OCAML_VERSION="4.07"
   matrix:
