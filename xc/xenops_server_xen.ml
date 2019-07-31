@@ -2329,7 +2329,9 @@ module PCI = struct
          let guest_pci =
            Device.Dm.pci_assign_guest ~xs ~dm:(dm_of vm)
              ~qemu_domid:frontend_domid ~host:pci.address ~index in
-         Device.PCI.add ~xc ~xs ~hvm [ pci.address, (index, guest_pci) ] frontend_domid
+         let device =
+           Device.PCI.{host = pci.address; guest = (index, guest_pci) } in
+         Device.PCI.add ~xc ~xs ~hvm [ device ] frontend_domid
       ) vm
 
   let unplug task vm pci =
