@@ -1056,9 +1056,8 @@ module PV_Vnc = struct
         |> Unixext.string_of_file
         |> Stdext.Xstringext.String.split '\000'
       in
-      if (List.mem !Xc_resources.vncterm cmdline) && (List.mem (vnc_console_path domid) cmdline)
-      then true
-      else false
+      (List.mem !Xc_resources.vncterm cmdline) &&
+      (List.mem (vnc_console_path domid) cmdline)
     with _ -> false
 
   let is_vncterm_running ~xs domid =
