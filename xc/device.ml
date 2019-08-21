@@ -2178,11 +2178,10 @@ module Dm_Common = struct
           ; sprintf "media=%s" (string_of_media media)
           ] @ (format_of_media media file))
     ; "-device"; String.concat ","
-        ([ "nvme"
-         ; sprintf "serial=%s" id
+        ([ "nvme-ns"
          ; sprintf "drive=%s" id
-         ; sprintf "addr=%d" 7
-           (* 4 and 5 are NICs, and we can only have two, 6 is platform *)
+         ; sprintf "bus=nvme%d" 0
+         ; sprintf "nsid=%d" (index + 1)
          ])
     ]
 
@@ -2326,6 +2325,7 @@ module Backend = struct
       val max_emulated: int option (** None = just the qemu imposed 4 IDE device limit *)
       val default: string
       val types: (string * Dm_Common.disk_type_args) list
+      val extra_args: string list
     end
 
     module Firmware: sig
@@ -2365,6 +2365,7 @@ module Backend = struct
       let max_emulated = None
       let default = Dm_Common.ide
       let types = [Dm_Common.ide, Dm_Common.ide_device_of ~trad_compat:true]
+      let extra_args = []
     end
 
     module XenPlatform = struct
@@ -2462,10 +2463,12 @@ module Backend = struct
     end
 
     module DISK = struct
-      let max_emulated = Some 1
+      let max_emulated = Some 4
       let default = Dm_Common.nvme
       let types = [ Dm_Common.ide, Dm_Common.ide_device_of ~trad_compat:false
                   ; Dm_Common.nvme, Dm_Common.nvme_device_of ]
+      (* 4 and 5 are NICs, and we can only have two, 6 is platform *)
+      let extra_args = [ "-device"; "nvme,serial=nvme0,id=nvme0,addr=7" ]
     end
 
     module XenPV = struct
@@ -2983,6 +2986,8 @@ module Backend = struct
           |> List.concat |> List.concat
         in
 
+        let disks'' = Config.DISK.extra_args @ disks' in
+
         (* Sort the VIF devices by devid *)
         let nics = List.stable_sort
           (fun (_,_,a) (_,_,b) -> compare a b) info.Dm_Common.nics in
@@ -3021,12 +3026,12 @@ module Backend = struct
         |> function
         |  _, _, []    ->
           Dm_Common.
-            { argv   = common.argv   @ misc @ disks' @ pv_device pv_device_addr @ none
+            { argv   = common.argv   @ misc @ disks'' @ pv_device pv_device_addr @ none
             ; fd_map = common.fd_map
             }
         | _, fds, argv ->
           Dm_Common.
-            { argv   = common.argv   @ misc @ disks' @ pv_device pv_device_addr @ argv
+            { argv   = common.argv   @ misc @ disks'' @ pv_device pv_device_addr @ argv
             ; fd_map = common.fd_map @ fds
             }
 
