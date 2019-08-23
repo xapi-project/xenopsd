@@ -2180,7 +2180,7 @@ module Dm_Common = struct
     ; "-device"; String.concat ","
         ([ "nvme-ns"
          ; sprintf "drive=%s" id
-         ; sprintf "bus=nvme%d" 0
+         ; "bus=nvme0"
          ; sprintf "nsid=%d" (index + 1)
          ])
     ]
@@ -2982,11 +2982,10 @@ module Backend = struct
 
         let disks' =
           [ List.map (List.assoc Dm_Common.ide Config.DISK.types) disks_cdrom
+          ; [Config.DISK.extra_args]
           ; disks_other |> limit_emulated_disks |> List.map disk_interface ]
           |> List.concat |> List.concat
         in
-
-        let disks'' = Config.DISK.extra_args @ disks' in
 
         (* Sort the VIF devices by devid *)
         let nics = List.stable_sort
@@ -3026,12 +3025,12 @@ module Backend = struct
         |> function
         |  _, _, []    ->
           Dm_Common.
-            { argv   = common.argv   @ misc @ disks'' @ pv_device pv_device_addr @ none
+            { argv   = common.argv   @ misc @ disks' @ pv_device pv_device_addr @ none
             ; fd_map = common.fd_map
             }
         | _, fds, argv ->
           Dm_Common.
-            { argv   = common.argv   @ misc @ disks'' @ pv_device pv_device_addr @ argv
+            { argv   = common.argv   @ misc @ disks' @ pv_device pv_device_addr @ argv
             ; fd_map = common.fd_map @ fds
             }
 
