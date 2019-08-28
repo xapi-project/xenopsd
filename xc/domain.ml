@@ -55,6 +55,14 @@ type arch_domainconfig = Xenctrl.arch_domainconfig =
 type domain_create_flag = Xenctrl.domain_create_flag =
   | CDF_HVM
   | CDF_HAP
+  | CDF_S3_INTEGRITY
+  | CDF_OOS_OFF
+  | CDF_XS_DOMAIN
+  | CDF_IOMMU
+[@@deriving rpcty]
+
+type domain_create_iommu_opts = Xenctrl.domain_create_iommu_opts =
+  | IOMMU_NO_SHAREPT
 [@@deriving rpcty]
 
 let emulation_flags_all = [
@@ -78,6 +86,7 @@ type domctl_create_config = Xenctrl.domctl_create_config = {
   ssidref: int32;
   handle: string;
   flags: domain_create_flag list;
+  iommu_opts: domain_create_iommu_opts list;
   max_vcpus: int;
   max_evtchn_port: int;
   max_grant_frames: int;
@@ -251,7 +260,8 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid =
   let config = {
     ssidref = vm_info.ssidref;
     handle = Uuid.to_string uuid;
-    flags = flags;
+    flags = CDF_IOMMU :: flags;
+    iommu_opts = [];
     max_vcpus = vcpus;
     max_evtchn_port = -1;
     max_grant_frames =
