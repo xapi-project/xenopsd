@@ -109,6 +109,7 @@ type build_info = {
   kernel: string;       (* in hvm case, point to hvmloader *)
   vcpus: int;           (* vcpus max *)
   priv: builder_spec_info;
+  nomigrate: bool       (* flag passed to xenguest *)
 }
 val typ_of_build_info: build_info Rpc.Types.typ
 val build_info: build_info Rpc.Types.def

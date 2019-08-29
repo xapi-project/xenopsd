@@ -950,6 +950,7 @@ module VM = struct
       kernel = "";
       vcpus = vm.vcpu_max;
       priv = builder_spec_info;
+      nomigrate = false; (* no PCI pass-through on old VMs? *)
     } in
     VmExtra.{ default_persistent_t with
               build_info = Some build_info;
@@ -1471,12 +1472,22 @@ module VM = struct
     let initial_target = get_initial_target ~xs domid in
     let static_max_kib = vm.memory_static_max /// 1024L in
     let static_max_mib = static_max_kib /// 1024L in
+
+    let nomigrate vm =
+      let platformdata = vm.Xenops_interface.Vm.platformdata in
+        Platform.is_true ~key:"nomigrate" ~platformdata ~default:false
+        || Platform.is_true ~key:"nested-virt" ~platformdata ~default:false
+        || Platform.is_true ~key:"exp-nested-hvm" ~platformdata ~default:false
+        || extras <> [] (* contains PCI pass-trough devices *)
+    in
+
     let make_build_info kernel priv = {
       Domain.memory_max = static_max_kib;
       memory_target = initial_target;
       kernel = kernel;
       vcpus = vm.vcpu_max;
       priv = priv;
+      nomigrate = nomigrate vm;
     } in
     debug "static_max_mib=%Ld" static_max_mib;
     let pvinpvh_xen_cmdline =

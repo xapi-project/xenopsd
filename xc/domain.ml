@@ -126,6 +126,7 @@ type build_info = {
   kernel: string;       (* in hvm case, point to hvmloader *)
   vcpus: int;           (* vcpus max *)
   priv: builder_spec_info;
+  nomigrate: bool       (* flag passed to xenguest *)
 } [@@deriving rpcty]
 
 type domid = int
@@ -807,6 +808,7 @@ let build (task: Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid ~t
   let vcpus = info.vcpus in
   let kernel = info.kernel in
   let force_arg = if force then ["--force"] else [] in
+  let nomigrate = if info.nomigrate then ["-nomigrate"] else [] in
 
   assert_file_is_readable kernel;
 
@@ -828,7 +830,7 @@ let build (task: Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid ~t
       let store_mfn, console_mfn =
         let args = xenguest_args_hvm ~domid ~store_port ~store_domid ~console_port
           ~console_domid ~memory ~kernel ~vgpus
-          @ force_arg @ extras in
+          @ force_arg @ extras @ nomigrate in
         xenguest task xenguest_path domid uuid args
       in
       correct_shadow_allocation xc domid uuid memory.Memory.shadow_mib;
@@ -843,7 +845,7 @@ let build (task: Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid ~t
       let store_mfn, console_mfn =
         let args = xenguest_args_pv ~domid ~store_port ~store_domid ~console_port
           ~console_domid ~memory ~kernel ~cmdline:pvinfo.cmdline ~ramdisk:pvinfo.ramdisk
-          @ force_arg @ extras in
+          @ force_arg @ extras @ nomigrate in
         xenguest task xenguest_path domid uuid args
       in
       store_mfn, store_port, console_mfn, console_port, []
@@ -857,7 +859,7 @@ let build (task: Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid ~t
       let store_mfn, console_mfn =
         let args = xenguest_args_pvh ~domid ~store_port ~store_domid ~console_port ~console_domid ~memory
             ~kernel ~cmdline:pvhinfo.cmdline ~modules:pvhinfo.modules
-          @ force_arg @ extras in
+          @ force_arg @ extras @ nomigrate in
         xenguest task xenguest_path domid uuid args
       in
       correct_shadow_allocation xc domid uuid memory.Memory.shadow_mib;
