@@ -234,7 +234,7 @@ let wait_xen_free_mem ~xc ?(maximum_wait_time_seconds=64) required_memory_kib : 
   wait 0
 
 
-let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid =
+let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid sriov =
   let flags = if vm_info.hvm then begin
       let default_flags =
         (if vm_info.hvm then [ CDF_HVM ] else []) @
@@ -260,8 +260,18 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid =
   let config = {
     ssidref = vm_info.ssidref;
     handle = Uuid.to_string uuid;
-    flags = CDF_IOMMU :: flags;
-    iommu_opts = [];
+    flags = begin match sriov with
+      | true ->
+          debug "VM %s - using CDF_IOMMU" (Uuid.to_string uuid);
+          CDF_IOMMU :: flags
+      | false -> flags
+    end;
+    iommu_opts = begin match sriov with
+      | true  ->
+          debug "VM %s - using IOMMU_NO_SHAREPT" (Uuid.to_string uuid);
+          [ IOMMU_NO_SHAREPT ]
+      | false -> []
+    end;
     max_vcpus = vcpus;
     max_evtchn_port = -1;
     max_grant_frames =
