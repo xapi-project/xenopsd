@@ -43,13 +43,13 @@
 (rule (with-stdout-to "generated_stubs.c" (run "./stubgen_c.exe")))
 
 (library
- (name xenctrlext)
+ (name xenctrlext2)
  (public_name xapi-xenopsd.c_stubs.xenctrlext)
- (modules generated xenctrlext)
+ (modules generated xenctrlext2)
  (c_names generated_stubs)
  (libraries xenctrl xenctrlext_bindings ctypes.stubs ctypes))
 
 (executable
  (name xenctrlext_test)
  (modules xenctrlext_test)
- (libraries xenctrlext))
+ (libraries xenctrlext2))
