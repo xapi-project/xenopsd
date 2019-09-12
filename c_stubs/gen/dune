@@ -1,0 +1,55 @@
+(library
+ (name bindings_structs_lib)
+ (public_name xapi-xenopsd.c_stubs.xenctrlext.structs)
+ (modules bindings_structs)
+ (libraries
+  ctypes
+  ctypes.stubs))
+
+(executable
+ (name stubgen)
+ (modules stubgen)
+ (libraries
+  bindings_structs_lib
+  ctypes.stubs
+  ctypes))
+
+; C file built by stubgen
+(rule (with-stdout-to "types_stubgen.c" (run "./stubgen.exe")))
+
+; C executable that checks struct offsets and constants and outputs ML file
+(rule
+ (targets types_stubgen.exe)
+ (deps (:x ./types_stubgen.c) ../../xentoollog_flags)
+ (action (bash "%{cc} %{x} %{read-strings:../../xentoollog_flags} \
+          -I `dirname %{lib:ctypes:ctypes_cstubs_internals.h}` -I %{ocaml_where} -o %{targets}")))
+
+(rule (with-stdout-to "generated_types.ml" (run "./types_stubgen.exe")))
+
+(library
+ (name xenctrlext_bindings)
+ (public_name xapi-xenopsd.c_stubs.xenctrlext.bindings)
+ (flags (:standard -w -9-27))
+ (modules generated_types bindings)
+ (libraries bindings_structs_lib ctypes ctypes.stubs))
+
+; The actual C/ML stub generator using the above constants
+(executables
+ (names stubgen_c stubgen_ml)
+ (modules stubgen_c stubgen_ml)
+ (libraries bindings_structs_lib ctypes.stubs ctypes xenctrlext_bindings))
+
+(rule (with-stdout-to "generated.ml" (run "./stubgen_ml.exe")))
+(rule (with-stdout-to "generated_stubs.c" (run "./stubgen_c.exe")))
+
+(library
+ (name xenctrlext)
+ (public_name xapi-xenopsd.c_stubs.xenctrlext)
+ (modules generated xenctrlext)
+ (c_names generated_stubs)
+ (libraries xenctrl xenctrlext_bindings ctypes.stubs ctypes))
+
+(executable
+ (name xenctrlext_test)
+ (modules xenctrlext_test)
+ (libraries xenctrlext))
