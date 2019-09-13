@@ -224,7 +224,6 @@ let wait_xen_free_mem ~xc ?(maximum_wait_time_seconds=64) required_memory_kib : 
       end in
   wait 0
 
-
 let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid =
   let flags = if vm_info.hvm then begin
       let default_flags =
@@ -624,6 +623,54 @@ let create_channels ~xc uuid domid =
   debug "VM = %s; domid = %d; store evtchn = %d; console evtchn = %d" (Uuid.to_string uuid) domid store console;
   store, console
 
+let numa_cputopo =
+  let open Xenctrlext2 in
+  Lazy.from_fun (fun () ->
+    let topo = Xenctrlext2.(with_xc cputopoinfo) in
+    let max_nodes = 1 + (topo |> Array.map (fun t -> t.Cputopo.node) |> Array.fold_left max 0) in
+    let node_cpus = Array.init max_nodes (fun _ -> []) in
+    debug "max_nodes: %d\n" max_nodes;
+    Array.iteri (fun i t ->
+      let n = t.Cputopo.node in
+      node_cpus.(n) <- i :: node_cpus.(n)
+    ) topo;
+    Array.to_list node_cpus)
+
+
+let numa_placement domid ~vcpus ~memory =
+  let open Xenctrlext2 in
+  (* TODO: mutex *)
+  let numa_meminfo, numa_distances = Xenctrlext2.(with_xc numainfo) in
+  let topo = Lazy.force numa_cputopo in
+  let numa_meminfo = Array.to_list numa_meminfo in
+  let numa = List.map2 (fun a b -> a, b) numa_meminfo topo in
+  let try_allocate ~vcpus ~memory =
+    numa |> List.filter (fun (mem, cpus) ->
+      mem.Meminfo.memfree >= memory &&
+         List.length cpus >= vcpus)
+   |> List.sort (fun (mem1, _) (mem2, _) ->
+       (* TODO: should also look at how many CPUs are in use *)
+       debug "mem1: %Ld vs mem2: %Ld\n" mem1.Meminfo.memfree mem2.Meminfo.memfree;
+       Int64.compare mem2.Meminfo.memfree mem1.Meminfo.memfree)
+   |> List.hd |> snd
+  in
+  try
+    (* TODO: look at and intersect with hard mask *)
+    let cpus = try_allocate ~vcpus ~memory in
+    let max_cpus = List.fold_left (fun a l -> (List.length l) + a) 0 topo in
+    let cpua = Array.init (max_cpus) (fun _ -> false) in
+    List.iter (fun c -> cpua.(c) <- true) cpus;
+    let cpua = Array.to_list cpua in
+    Xenctrlext2.with_xc (fun xc ->
+    for i = 0 to vcpus - 1 do
+      Xenctrlext2.vcpu_setaffinity xc domid i None (Some cpua)
+    done)
+  with e ->
+    let bt = Printexc.get_backtrace () in
+    warn "Failed to allocate: %s, %s" (Printexc.to_string e) bt;
+    ()
+  (* TODO: now fall back and allocate /2, /4 etc. and look at distances *)
+
 let build_pre ~xc ~xs ~vcpus ~memory domid =
   let open Memory in
   let uuid = get_uuid ~xc domid in
@@ -647,6 +694,8 @@ let build_pre ~xc ~xs ~vcpus ~memory domid =
     debug "VM = %s; domid = %d; %s" (Uuid.to_string uuid) domid call_str;
     try ignore (f ())
     with e ->
+      let bt = Printexc.get_backtrace () in
+      debug "Backtrace: %s" bt;
       let err_msg =
         Printf.sprintf "Calling '%s' failed: %s" call_str (Printexc.to_string e)
       in
@@ -674,6 +723,11 @@ let build_pre ~xc ~xs ~vcpus ~memory domid =
   log_reraise (Printf.sprintf "shadow_allocation_set %d MiB" shadow_mib) (fun () ->
       Xenctrl.shadow_allocation_set xc domid shadow_mib
     );
+
+  log_reraise (Printf.sprintf "NUMA placement") (fun () ->
+    (* TODO: best effort *)
+    numa_placement domid ~vcpus ~memory:(Int64.mul memory.xen_max_mib 1048576L)
+  );
 
   create_channels ~xc uuid domid
 

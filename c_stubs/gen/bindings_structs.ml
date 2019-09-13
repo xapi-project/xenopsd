@@ -43,4 +43,6 @@ module Make(S: Cstubs_structs.TYPE) = struct
     let () = seal t
   end
 
+  let xen_vcpuaffinity_soft = constant "XEN_VCPUAFFINITY_SOFT" uint32_t
+  let xen_vcpuaffinity_hard = constant "XEN_VCPUAFFINITY_HARD" uint32_t
 end
