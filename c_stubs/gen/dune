@@ -1,6 +1,5 @@
 (library
  (name bindings_structs_lib)
- (public_name xapi-xenopsd.c_stubs.xenctrlext.structs)
  (modules bindings_structs)
  (libraries
   ctypes
@@ -28,7 +27,6 @@
 
 (library
  (name xenctrlext_bindings)
- (public_name xapi-xenopsd.c_stubs.xenctrlext.bindings)
  (flags (:standard -w -9-27))
  (modules generated_types bindings)
  (libraries bindings_structs_lib ctypes ctypes.stubs))
@@ -44,7 +42,6 @@
 
 (library
  (name xenctrlext2)
- (public_name xapi-xenopsd.c_stubs.xenctrlext)
  (modules generated xenctrlext2)
  (c_names generated_stubs)
  (libraries xenctrl xenctrlext_bindings ctypes.stubs ctypes))
