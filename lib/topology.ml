@@ -1,3 +1,4 @@
+module D = Debug.Make(struct let name = "topology" end)
 (* similar to Base's validate *)
 module type Checked = sig
   type raw
@@ -64,7 +65,10 @@ end = struct
           Array.for_all (fun a -> Array.length a = n) matrix
 
         let invariants =
-          [ "Must be a square matrix", is_square_matrix ]
+          [ "Must be a square matrix", is_square_matrix
+          ; "Distances must be non-negative",
+            Array.for_all (Array.for_all (fun i -> i > 0))
+          ]
     end)
     let dim (t: t) = Array.length (to_raw t)
   end
@@ -73,6 +77,9 @@ end = struct
 end
 
 module Cpu : sig
+  (** The innermost hierarchical element, currently a CPU core.
+   * Abstract, to allow for future topologies that are more complicated
+     * *)
   module T : sig
     type t = {
       core: int;
@@ -80,10 +87,11 @@ module Cpu : sig
       hier: int list
     }
   end
+
   include Checked with type raw := T.t
-  (** The innermost hierarchical element, currently a CPU core.
-   * Abstract, to allow for future topologies that are more complicated
-     * *)
+
+  val v : core: int -> socket: int -> node: MemoryNode.t -> t
+
   (** [max_cpu] is the maximum number of CPUs supportable by Xen *)
   val max_cpu : int
 
@@ -108,6 +116,9 @@ end = struct
           fun t -> List.for_all (fun i -> i >= 0) t.hier ]
   end)
 
+  let v ~core ~socket ~node =
+    of_raw { core; node; hier = [socket; core] }
+
   let rec sharing level a b = match a, b with
     | e1 :: tl1, e2 :: tl2 ->
       if e1 = e2 then sharing (level+1) tl1 tl2
@@ -127,7 +138,10 @@ module Cpuset : sig
   val empty : t
   val v : int list -> t
   val add : int -> t -> t
+  val inter: t -> t -> t
   val fold: f:(int -> 'a -> 'a) -> init:'a -> t -> 'a
+  val is_empty : t -> bool
+  val active: t -> int
 end = struct
   module CS = Set.Make(struct type t = int let compare (a:int) (b:int) = a-b end)
   type cpus = int list [@@deriving rpcty]
@@ -142,6 +156,11 @@ end = struct
   let v l = CS.of_list (C.of_raw l :> int list)
   let add = CS.add
   let fold ~f ~init t = CS.fold f t init
+  let inter = CS.inter
+  let is_empty = CS.is_empty
+
+  let active = CS.cardinal
+
   let typ_of =
     let open Rpc.Types in
     let rpc_of t = Rpcmarshal.marshal typ_of_cpus (CS.elements t) in
@@ -156,22 +175,31 @@ end
 
 module Hierarchy : sig
   type t
+  val typ_of: t Rpc.Types.typ
 
   val v : Cpu.t list -> MemoryNode.Distances.t -> t
 
   (** [sharing a b] is a higher number the more resources the 2 CPUs share *)
   val sharing: t -> Cpu.t -> Cpu.t -> int
+
+  val to_string : t -> string
+
+  val cpus: t -> MemoryNode.t -> Cpuset.t
+
+  val apply_mask : t -> Cpuset.t -> t
 end = struct
   type t = {
     cpus: Cpu.t array;
+    nodes: MemoryNode.t list;
     distances: MemoryNode.Distances.t;
     node_cpus: Cpuset.t array;
   } [@@deriving rpcty]
 
   let sharing _ a b = Cpu.sharing a b
+  let to_string t = Rpcmarshal.marshal typ_of t |> Jsonrpc.to_string
 
   let v cpus distances =
-    let numa_nodes = 1 + MemoryNode.Distances.dim distances in
+    let numa_nodes = MemoryNode.Distances.dim distances in
     let max_numa = MemoryNode.of_raw (numa_nodes - 1) in
     let cpus = Array.of_list cpus in
     Array.iteri (fun i e ->
@@ -187,5 +215,80 @@ end = struct
         let node = cpu.Cpu.T.node |> MemoryNode.to_raw in
         node_cpus.(node) <- Cpuset.add cpu.Cpu.T.core node_cpus.(node)
     ) cpus;
-    { cpus; distances; node_cpus }
+    let nodes = List.init numa_nodes MemoryNode.of_raw in
+    { cpus; distances; nodes; node_cpus }
+
+  let cpus t n = t.node_cpus.(MemoryNode.to_raw n)
+
+  let apply_mask t mask =
+    let node_cpus = Array.map (fun cpuset ->
+        Cpuset.inter cpuset mask) t.node_cpus in
+    { t with node_cpus }
+end
+
+module Planner = struct
+  module Node = struct
+    module T = struct
+      type t = {
+          node: MemoryNode.t;
+          memsize: int64;
+          memfree: int64;
+        } [@@deriving rpcty]
+    end
+    include Check(struct
+        type t = T.t [@@deriving rpcty]
+        let invariants =
+          ["memsize must be positive", (fun t -> t.T.memsize >= 0L)
+          ;"memfree must be positive", (fun t -> t.T.memfree >= 0L)
+          ]
+      end)
+  end
+  module VM = struct
+    type t = {
+      vcpus: int;
+      mem: int64;
+      hard_affinity: Cpuset.t
+    } [@@deriving rpcty]
+  end
+  type t = {
+    host: Hierarchy.t;
+    nodes: Node.t list;
+  } [@@deriving rpcty]
+
+
+  let filter_available t vm =
+    { t with nodes = List.filter (fun n ->
+          let node = Node.to_raw n in
+          node.Node.T.memfree > 0L &&
+          not @@ Cpuset.is_empty (Hierarchy.cpus t.host node.Node.T.node)
+        ) t.nodes }
+
+  let roundup_div64 a b =
+    Int64.div (Int64.add a (Int64.pred b)) b
+
+  let roundup_div a b =
+    (a + b - 1) / b
+
+  let plan t vm =
+    let t = filter_available { t with host = Hierarchy.apply_mask t.host vm.VM.hard_affinity } vm in
+    let max_numa_nodes = Int64.of_int (List.length t.nodes) in
+    let plan_on_node node =
+      let node = Node.to_raw node in
+      let cpus = Hierarchy.cpus t.host node.Node.T.node |> Cpuset.active in
+      let splits_mem = max 1L @@ min max_numa_nodes (roundup_div64 vm.VM.mem node.Node.T.memfree) in
+      let splits_cpu = max 1 @@ roundup_div vm.VM.vcpus cpus in
+      let splits = max (Int64.to_int splits_mem) splits_cpu in
+      D.debug "Node %d: %d splits" (MemoryNode.to_raw  node.Node.T.node) splits;
+      splits, node
+    in
+    let pick_smallest_split lst =
+      let smallest = lst |> List.map fst |> List.fold_left min max_int in
+      List.filter (fun (splits, _) -> splits = smallest) lst
+    in
+    let node_load_cmp (_, a) (_, b) =
+      (* approximation: use free memory *)
+      a.Node
+
+    in
+    t.nodes |> List.map plan_on_node |> pick_smallest_split |> List.sort node_load_cmp
 end
