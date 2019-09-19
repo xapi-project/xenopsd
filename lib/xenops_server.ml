@@ -1856,8 +1856,8 @@ and perform_exn ?subtask ?result (op: operation) (t: Xenops_task.task_handle) : 
         );
 
         (try
-           let no_sharept =
-             VGPU_DB.list id |> List.map fst |> List.exists is_no_sharept in
+           let no_sharept = VGPU_DB.vgpus id |> List.exists is_no_sharept in
+           debug "VM %s no_sharept=%b (%s)" id no_sharept __LOC__;
            perform_atomics (
              [VM_create (id, Some memory_limit, Some final_id, no_sharept);] @
              (* Perform as many operations as possible on the destination domain before pausing the original domain *)
