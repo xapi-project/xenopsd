@@ -83,6 +83,7 @@ end) : sig
   val get : t -> int -> E.t
 
   val iter : (E.t -> unit) -> t -> unit
+  val iteri : (int -> E.t -> unit) -> t -> unit
 
   val fold_left : ('a -> E.t -> 'a) -> 'a -> t -> 'a
 
@@ -97,6 +98,8 @@ end = struct
   let get a i = a.(i)
 
   let iter = Array.iter
+
+  let iteri = Array.iteri
 
   let fold_left = Array.fold_left
 
@@ -127,14 +130,20 @@ module CPU = BoundedInt (struct
   let lt = max_cpu
 end)
 
+module CPUHier = BoundedInt (struct
+  let gte = 0
+
+  let lt = max_cpu
+end)
+
 (** Topology showing the physical hierarchy of a core,
  * and the memory hierarchy (NUMA node) *)
 module CPUTopo = struct
-  type t = {core: CPU.t; node: Node.t; hier: CPU.t list} [@@deriving rpcty]
+  type t = {core: CPUHier.t; node: Node.t; hier: CPUHier.t list} [@@deriving rpcty]
 
   let v ~core ~socket ~node =
-    let core = CPU.v core in
-    let socket = CPU.v socket in
+    let core = CPUHier.v core in
+    let socket = CPUHier.v socket in
     let node = Node.v node in
     {core; node; hier= [socket; core]}
 
@@ -183,17 +192,6 @@ end
 (* Quick access to topology information about a core *)
 module CPUIndex = struct
   include Indexed (CPUTopo)
-
-  let v a =
-    let r = v a in
-    Array.iteri
-      (fun i c ->
-        if CPU.to_int c.CPUTopo.core <> i then
-          invalid_arg
-          @@ Printf.sprintf "core index mismatch at %d: %s" i
-               (to_string typ_of r))
-      a ;
-    r
 
   let get t c = get t (CPU.to_int c)
 end
@@ -265,10 +263,10 @@ end = struct
   let v cpus distances =
     let nodes = Distances.nodes distances in
     let node_cpus = Array.init nodes (fun _ -> CPUSet.empty) in
-    CPUIndex.iter
-      (fun c ->
+    CPUIndex.iteri
+      (fun i c ->
         let n = Node.to_int c.CPUTopo.node in
-        node_cpus.(n) <- CPUSet.add c.CPUTopo.core node_cpus.(n))
+        node_cpus.(n) <- CPUSet.add (CPU.v i) node_cpus.(n))
       cpus ;
     let t = {cpus; distances; node_cpus= Node2CPU.v node_cpus} in
     invariant t ; t

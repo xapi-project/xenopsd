@@ -11,7 +11,7 @@ let make_numa ~numa ~sockets ~cores =
   let cpus = Array.init cores (fun core ->
     let node = core / cores_per_numa in
     let socket = core / cores_per_socket in
-    CPUTopo.v ~core ~socket ~node
+    CPUTopo.v ~core:(core mod cores_per_socket) ~socket ~node
   ) |> CPUIndex.v in
   Hierarchy.v cpus distances
 
