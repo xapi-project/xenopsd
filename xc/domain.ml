@@ -623,53 +623,38 @@ let create_channels ~xc uuid domid =
   debug "VM = %s; domid = %d; store evtchn = %d; console evtchn = %d" (Uuid.to_string uuid) domid store console;
   store, console
 
-let numa_cputopo =
+let numa_hierarchy =
   let open Xenctrlext2 in
   Lazy.from_fun (fun () ->
-    let topo = Xenctrlext2.(with_xc cputopoinfo) in
-    let max_nodes = 1 + (topo |> Array.map (fun t -> t.Cputopo.node) |> Array.fold_left max 0) in
-    let node_cpus = Array.init max_nodes (fun _ -> []) in
-    debug "max_nodes: %d\n" max_nodes;
-    Array.iteri (fun i t ->
-      let n = t.Cputopo.node in
-      node_cpus.(n) <- i :: node_cpus.(n)
-    ) topo;
-    Array.to_list node_cpus)
-
+      Xenctrlext2.(with_xc cputopoinfo) |> Array.map (fun t -> t) |> CPUIndex.v)
 
 let numa_placement domid ~vcpus ~memory =
   let open Xenctrlext2 in
   (* TODO: mutex *)
+  let cpus = Lazy.force numa_cputopo in
   let numa_meminfo, numa_distances = Xenctrlext2.(with_xc numainfo) in
-  let topo = Lazy.force numa_cputopo in
-  let numa_meminfo = Array.to_list numa_meminfo in
-  let numa = List.map2 (fun a b -> a, b) numa_meminfo topo in
-  let try_allocate ~vcpus ~memory =
-    numa |> List.filter (fun (mem, cpus) ->
-      mem.Meminfo.memfree >= memory &&
-         List.length cpus >= vcpus)
-   |> List.sort (fun (mem1, _) (mem2, _) ->
-       (* TODO: should also look at how many CPUs are in use *)
-       debug "mem1: %Ld vs mem2: %Ld\n" mem1.Meminfo.memfree mem2.Meminfo.memfree;
-       Int64.compare mem2.Meminfo.memfree mem1.Meminfo.memfree)
-   |> List.hd |> snd
+  let distances = Distances.v numa_distances in
+  let host = Hierarchy.v cpus distances in
+  let nodes =
+    numa_meminfo |>
+    Array.mapi (fun i m ->
+        NUMANode.v ~node:i ~memfree:m.Meminfo.memfree ~memsize:m.Meminfo.memsize)
+    |> Array.to_list
   in
-  try
-    (* TODO: look at and intersect with hard mask *)
-    let cpus = try_allocate ~vcpus ~memory in
-    let max_cpus = List.fold_left (fun a l -> (List.length l) + a) 0 topo in
-    let cpua = Array.init (max_cpus) (fun _ -> false) in
-    List.iter (fun c -> cpua.(c) <- true) cpus;
-    let cpua = Array.to_list cpua in
+  let planner = Planner.v host nodes in
+  (* TODO: parse the vCPU params of the VM *)
+  let hard_affinity = Hierarchy.all host in
+  let vm = {Planner.VM.vcpus = CPU.of_int vcpus; mem = memory; hard_affinity } in
+  match Planner.plan planner vm with
+  | None ->
+    D.debug "NUMA-aware placement failed for domid %d" domid;
+  | Some soft_affinity ->
+    let cpua = Array.init (CPUSet.max_elt soft_affinity) (fun i ->
+        CPUSet.mem i soft_affinity) in
     Xenctrlext2.with_xc (fun xc ->
-    for i = 0 to vcpus - 1 do
-      Xenctrlext2.vcpu_setaffinity xc domid i None (Some cpua)
-    done)
-  with e ->
-    let bt = Printexc.get_backtrace () in
-    warn "Failed to allocate: %s, %s" (Printexc.to_string e) bt;
-    ()
-  (* TODO: now fall back and allocate /2, /4 etc. and look at distances *)
+        for i = 0 to vcpus - 1 do
+          Xenctrlext2.vcpu_setaffinity xc domid i None (Some cpua)
+        done)
 
 let build_pre ~xc ~xs ~vcpus ~memory domid =
   let open Memory in
@@ -724,11 +709,16 @@ let build_pre ~xc ~xs ~vcpus ~memory domid =
       Xenctrl.shadow_allocation_set xc domid shadow_mib
     );
 
-  log_reraise (Printf.sprintf "NUMA placement") (fun () ->
-    (* TODO: best effort *)
-    numa_placement domid ~vcpus ~memory:(Int64.mul memory.xen_max_mib 1048576L)
-  );
-
+  if Xenopsd.numa_placement then
+    log_reraise (Printf.sprintf "NUMA placement") (fun () ->
+        let do_numa_placement () =
+            numa_placement domid ~vcpus ~memory:(Int64.mul memory.xen_max_mib 1048576L)
+        in
+        if Xenopsd.numa_placement_strict then
+          do_numa_placement ()
+        else
+          Xenops_utils.best_effort "NUMA placement" do_numa_placement
+      );
   create_channels ~xc uuid domid
 
 let resume_post ~xc ~xs domid =

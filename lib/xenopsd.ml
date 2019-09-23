@@ -24,7 +24,6 @@ let minor_version = 9
 let sockets_path = ref Xenops_interface.default_sockets_dir
 let persist = ref true
 let worker_pool_size = ref 4
-
 let run_hotplug_scripts = ref true
 let use_old_pci_add = ref false
 let hotplug_timeout = ref 300.
@@ -45,6 +44,11 @@ let vif_ready_for_igmp_query_timeout = ref 120
 let feature_flags_path = ref "/etc/xenserver/features.d"
 
 let pvinpvh_xen_cmdline = ref "pv-shim"
+
+let numa_placement = ref true
+
+(* This is for debugging only *)
+let numa_placement_strict = ref false
 
 let options = [
   "queue", Arg.Set_string Xenops_interface.queue_name, (fun () -> !Xenops_interface.queue_name), "Listen on a specific queue";
@@ -68,6 +72,9 @@ let options = [
   "action-after-qemu-crash", Arg.String (fun x -> action_after_qemu_crash := if x="" then None else Some x), (fun () -> match !action_after_qemu_crash with None->"" | Some x->x), "Action to take for VMs if QEMU crashes or dies unexpectedly: pause, poweroff. Otherwise, no action (default).";
   "feature-flags-path", Arg.Set_string feature_flags_path, (fun () -> !feature_flags_path), "Directory of experimental feature flags";
   "pvinpvh-xen-cmdline", Arg.Set_string pvinpvh_xen_cmdline, (fun () -> !pvinpvh_xen_cmdline), "Command line for the inner-xen for PV-in-PVH guests";
+  "numa-placement", Arg.Bool (fun x -> numa_placement := x), (fun () -> string_of_bool !numa_placement), "NUMA-aware placement of VMs";
+  "numa-placement-strict", Arg.Bool (fun x -> numa_placement_strict := x), (fun () -> string_of_bool !numa_placement), "Fail if NUMA-aware placement is not possible";
+
 ]
 
 let path () = Filename.concat !sockets_path "xenopsd"
