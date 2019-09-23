@@ -228,6 +228,8 @@ module Hierarchy : sig
 
   val cpuset_of_node : t -> Node.t -> CPUSet.t
 
+  val node_of_cpu: t -> CPU.t -> Node.t
+
   val distance: t -> CPU.t -> Node.t -> int
 
   val all: t -> CPUSet.t
@@ -241,9 +243,9 @@ end = struct
   let all t =
     CPUSet.all (CPUIndex.length t.cpus)
 
+  let node_of_cpu t cpu = (CPUIndex.get t.cpus cpu).CPUTopo.node
   let distance t cpu node2 =
-    let node1 = (CPUIndex.get t.cpus cpu).CPUTopo.node in
-    Distances.distance t.distances node1 node2
+    Distances.distance t.distances (node_of_cpu t cpu) node2
 
   let invariant t =
     let max_used_node =
