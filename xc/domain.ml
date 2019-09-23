@@ -625,32 +625,36 @@ let create_channels ~xc uuid domid =
 
 let numa_hierarchy =
   let open Xenctrlext2 in
+  let open Topology in
   Lazy.from_fun (fun () ->
-      Xenctrlext2.(with_xc cputopoinfo) |> Array.map (fun t -> t) |> CPUIndex.v)
+      Xenctrlext2.(with_xc cputopoinfo) |> Array.map (fun t ->
+          CPUTopo.v ~core:t.Cputopo.core ~socket:t.Cputopo.socket ~node:t.Cputopo.node) |> Topology.CPUIndex.v)
 
 let numa_placement domid ~vcpus ~memory =
   let open Xenctrlext2 in
+  let open Topology in
   (* TODO: mutex *)
-  let cpus = Lazy.force numa_cputopo in
+  let cpus = Lazy.force numa_hierarchy in
   let numa_meminfo, numa_distances = Xenctrlext2.(with_xc numainfo) in
   let distances = Distances.v numa_distances in
   let host = Hierarchy.v cpus distances in
   let nodes =
     numa_meminfo |>
     Array.mapi (fun i m ->
-        NUMANode.v ~node:i ~memfree:m.Meminfo.memfree ~memsize:m.Meminfo.memsize)
+        Planner.NUMANode.v ~node:i ~memfree:m.Meminfo.memfree ~memsize:m.Meminfo.memsize)
     |> Array.to_list
   in
   let planner = Planner.v host nodes in
   (* TODO: parse the vCPU params of the VM *)
   let hard_affinity = Hierarchy.all host in
-  let vm = {Planner.VM.vcpus = CPU.of_int vcpus; mem = memory; hard_affinity } in
+  let vm = {Planner.VM.vcpus = CPU.v vcpus; mem = memory; hard_affinity } in
   match Planner.plan planner vm with
   | None ->
     D.debug "NUMA-aware placement failed for domid %d" domid;
-  | Some soft_affinity ->
-    let cpua = Array.init (CPUSet.max_elt soft_affinity) (fun i ->
-        CPUSet.mem i soft_affinity) in
+  | Some (_, soft_affinity) ->
+    let n = soft_affinity |> CPUSet.max_elt |> CPU.to_int in
+    let cpua = Array.init n (fun i ->
+        CPUSet.mem (CPU.v i) soft_affinity) |> Array.to_list in
     Xenctrlext2.with_xc (fun xc ->
         for i = 0 to vcpus - 1 do
           Xenctrlext2.vcpu_setaffinity xc domid i None (Some cpua)
@@ -709,12 +713,12 @@ let build_pre ~xc ~xs ~vcpus ~memory domid =
       Xenctrl.shadow_allocation_set xc domid shadow_mib
     );
 
-  if Xenopsd.numa_placement then
+  if !Xenopsd.numa_placement then
     log_reraise (Printf.sprintf "NUMA placement") (fun () ->
         let do_numa_placement () =
             numa_placement domid ~vcpus ~memory:(Int64.mul memory.xen_max_mib 1048576L)
         in
-        if Xenopsd.numa_placement_strict then
+        if !Xenopsd.numa_placement_strict then
           do_numa_placement ()
         else
           Xenops_utils.best_effort "NUMA placement" do_numa_placement
