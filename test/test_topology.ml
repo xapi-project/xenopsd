@@ -15,6 +15,43 @@ let make_numa ~numa ~sockets ~cores =
   ) |> CPUIndex.v in
   Hierarchy.v cpus distances
 
+type t = {
+  worst: int;
+  average: float;
+  best: int;
+} [@@deriving rpcty]
+
+let vm_access_costs host (nodes, cpuset) =
+  let nodes = List.map (fun n -> n.Planner.NUMANode.node) nodes in
+  let n = List.length nodes in
+  let costs = cpuset |> CPUSet.elements |> List.map (fun c ->
+      let distances = List.map (Hierarchy.distance host c) nodes in
+      let worst = List.fold_left max 0 distances in
+      let best = List.fold_left min max_int distances in
+      let average = float (List.fold_left (+) 0 distances) /. float n in
+      { worst; best; average }
+  ) |> List.fold_left (fun accum cost ->
+      { worst = max accum.worst cost.worst
+      ; average = accum.average +. cost.average
+      ; best = min accum.best cost.best }
+  ) { worst = min_int; average = 0.; best = max_int } in
+  { costs with average = costs.average /. (float @@ CPUSet.cardinal cpuset) }
+
+let cost_not_worse ~default c =
+  let worst = max default.worst c.worst in
+  let best = min default.best c.best in
+  let average = min default.average c.average in
+  D.debug "Default access times: %s; New plan: %s" (to_string typ_of default) (to_string typ_of c);
+  Alcotest.(check int "The worst-case access time should not be changed from default" default.worst worst);
+  Alcotest.(check int "Best case access time should not change" best c.best);
+  Alcotest.(check (float 1e-3) "Average access times could improve" average c.average);
+  if c.best < default.best then
+    D.debug "The new plan has improved the best-case access time!";
+  if c.worst < default.worst then
+    D.debug "The new plan has improved the worst-case access time!";
+  if c.average < default.average then
+    D.debug "The new plan has improved the average access time!"
+
 let test_allocate ~numa ~sockets ~cores ~vms () =
   let h = make_numa ~numa ~sockets ~cores in
   let memsize = Int64.shift_left 1L 34 in
@@ -46,11 +83,14 @@ let test_allocate ~numa ~sockets ~cores ~vms () =
             ) 0L usednodes in
           allocate @@ Int64.sub mem mem_allocated
       in
-      allocate mem
+      allocate mem;
+      let costs_numa_aware = vm_access_costs h (usednodes, plan) in
+      let costs_default = vm_access_costs h (Array.to_list nodes, Hierarchy.all h) in
+      cost_not_worse ~default:costs_default costs_numa_aware
   done
 
 let suite = "topology test",
-            ["Allocation of 1 VM on 1 node", `Quick, test_allocate ~numa:1 ~sockets:1 ~cores:1 ~vms:1
+            ["Allocation of 1 VM on 1 node", `Quick, test_allocate ~numa:1 ~sockets:1 ~cores:2 ~vms:1
             ;"Allocation of 10 VMs on 1 node", `Quick, test_allocate ~numa:1 ~sockets:1 ~cores:8 ~vms:10
             ;"Allocation of 1 VM on 2 nodes", `Quick, test_allocate ~numa:2 ~sockets:2 ~cores:4 ~vms:1
             ;"Allocation of 10 VM on 2 nodes", `Quick, test_allocate ~numa:2 ~sockets:2 ~cores:4 ~vms:10

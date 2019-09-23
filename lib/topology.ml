@@ -228,6 +228,8 @@ module Hierarchy : sig
 
   val cpuset_of_node : t -> Node.t -> CPUSet.t
 
+  val distance: t -> CPU.t -> Node.t -> int
+
   val all: t -> CPUSet.t
   val apply_mask : t -> CPUSet.t -> t
 end = struct
@@ -238,6 +240,10 @@ end = struct
 
   let all t =
     CPUSet.all (CPUIndex.length t.cpus)
+
+  let distance t cpu node2 =
+    let node1 = (CPUIndex.get t.cpus cpu).CPUTopo.node in
+    Distances.distance t.distances node1 node2
 
   let invariant t =
     let max_used_node =
@@ -345,7 +351,8 @@ module Planner = struct
       let splits_mem = max 1L @@ min max_numa_nodes (roundup_div64 vm.VM.mem node.NUMANode.memfree) in
       let splits_cpu = max 1 @@ roundup_div (CPU.to_int vm.VM.vcpus) cpus in
       let splits = max (Int64.to_int splits_mem) splits_cpu in
-      D.debug "Node %d: %d splits" (Node.to_int node.NUMANode.node) splits;
+      D.debug "Node %d: %d (%Ld; %d) splits" (Node.to_int node.NUMANode.node)
+        splits splits_mem splits_cpu;
       splits, node
     in
     let pick_smallest_split lst =
