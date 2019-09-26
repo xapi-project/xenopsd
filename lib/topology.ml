@@ -355,6 +355,9 @@ module Planner = struct
         splits splits_mem splits_cpu;
       splits, node
     in
+    (* 1 split is always better, but when we have multiple splits
+     * we need to look at smallest maximum distance,
+     * and smallest average *)
     let pick_smallest_split lst =
       let smallest = lst |> List.map fst |> List.fold_left min max_int in
       List.filter (fun (splits, _) -> splits = smallest) lst

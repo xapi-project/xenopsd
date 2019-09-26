@@ -15,6 +15,28 @@ let make_numa ~numa ~sockets ~cores =
   ) |> CPUIndex.v in
   Hierarchy.v cpus distances
 
+let make_numa_assymetric ~cores_per_numa =
+  (* e.g. AMD Opteron 6272 *)
+  let numa = 8 in
+  let distances =
+    [| [| 10;16;16;22;16;22;16;22 |]
+     ; [| 16;10;22;16;16;22;22;17 |]
+     ; [| 16;22;10;16;16;16;16;16 |]
+     ; [| 22;16;16;10;16;16;22;22 |]
+     ; [| 16;16;16;16;10;16;16;22 |]
+     ; [| 22;22;16;16;16;10;22;16 |]
+     ; [| 16;22;16;22;16;22;10;16 |]
+     ; [| 22;16;16;22;22;16;16;16 |]
+    |] |> Distances.v in
+  let cores = cores_per_numa * numa in
+  let cores_per_socket = cores / (numa / 2) in
+  let cpus = Array.init (cores_per_numa * numa) (fun core ->
+      let node = core / cores_per_numa in
+      let socket = core / cores_per_socket in
+      CPUTopo.v ~core:(core mod cores_per_socket) ~socket ~node
+    ) |> CPUIndex.v in
+  Hierarchy.v cpus distances
+
 type t = {
   worst: int;
   average: float;
@@ -32,15 +54,15 @@ let sum_costs l =
       ; best = min accum.best cost.best }
     ) { worst = min_int; average = 0.; bandwidth = 0.; best = max_int } l
 
-let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
-  let all_vms = ((vcpus, nodes), cpuset) :: all_vms in
+let vm_access_costs host all_vms (vcpus; nodes; cpuset) =
+  let all_vms = ((vcpus; nodes); cpuset) :: all_vms in
   let nodes = List.map (fun n -> n.Planner.NUMANode.node) nodes in
   let n = List.length nodes in
   let slice_of vcpus cpuset =
     float vcpus /. float (CPUSet.cardinal cpuset) in
-  (* a simple model with a single interconnect,
+  (* a simple model with a single interconnect;
    * assuming all non-local accesses go through it *)
-  let interconnect_slice_of ((_, nodes), cpuset) =
+  let interconnect_slice_of ((_; nodes); cpuset) =
     (* percentage of time that an access is a remote access *)
     let n = List.length nodes in
     let remote_percentage = float (n - 1) /. float n in
@@ -64,8 +86,8 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
        * *)
       D.debug "--";
       let all_slices =
-        List.fold_left (fun acc ((vcpus, _), cpuset) ->
-            D.debug "CPU %d, CPUSet: %s; slice: %f" (CPU.to_int c)
+        List.fold_left (fun acc ((vcpus; _); cpuset) ->
+            D.debug "CPU %d; CPUSet: %s; slice: %f" (CPU.to_int c)
               (to_string CPUSet.typ_of cpuset) (slice_of vcpus cpuset);
             if CPUSet.mem c cpuset then
               acc +. slice_of vcpus cpuset
@@ -74,7 +96,7 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
       let cpu_slice = want_slice /. all_slices in
       D.debug "cpu_slice: %f out of %f" want_slice all_slices;
       assert (want_slice <= all_slices);
-      (* if all CPUs in this NUMA node are busy accessing local memory,
+      (* if all CPUs in this NUMA node are busy accessing local memory;
        * how much of that bandwidth can this cpu get? *)
       let numa_local_slice =
         1. /. (float
@@ -83,11 +105,11 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
           used_cpus
         |> CPUSet.cardinal))
       in
-      (* we got N nodes, the local node is accessed only 1/N times *)
+      (* we got N nodes; the local node is accessed only 1/N times *)
       let numa_local_slice = numa_local_slice /. (float (List.length nodes)) in
       D.debug "NUMA local slice: %f" numa_local_slice;
       let numa_remote_slice =
-        let my_slice = interconnect_slice_of (((), nodes), CPUSet.singleton c) in
+        let my_slice = interconnect_slice_of (((); nodes); CPUSet.singleton c) in
         if my_slice <> 0. then
           my_slice /. all_interconnect_slices
         else 0.
@@ -118,7 +140,7 @@ let cost_not_worse ~default c =
   if c.average < default.average then
     D.debug "The new plan has improved the average access time!"
 
-let check_aggregate_costs_not_worse (default, next, _) =
+let check_aggregate_costs_not_worse (default; next; _) =
   let default = sum_costs default in
   let next = sum_costs next in
   cost_not_worse ~default next;
@@ -138,14 +160,14 @@ let test_allocate ~numa ~sockets ~cores ~vms () =
   Topology.D.debug "Hierarchy: %s" (to_string Hierarchy.typ_of h);
   let vm_cores = max 2 (cores / vms) in
   List.init vms (fun i -> i+1)
-  |> List.fold_left (fun (costs_old, costs_new, plans) i ->
+  |> List.fold_left (fun (costs_old; costs_new; plans) i ->
     Topology.D.debug "Planning VM %d" i;
     let p = Planner.v h (Array.to_list nodes) in
     let affinity = CPUSet.all cores in
     let vm = Planner.VM.{ vcpus = CPU.v vm_cores; mem; affinity } in
     match Planner.plan p vm with
     | None -> Alcotest.fail "No NUMA plan"
-    | Some (usednodes, plan) ->
+    | Some (usednodes; plan) ->
       Topology.D.debug "NUMA allocation succeeded for VM %d: %s"
         i (Topology.to_string CPUSet.typ_of plan);
       let rec allocate mem =
@@ -161,17 +183,17 @@ let test_allocate ~numa ~sockets ~cores ~vms () =
           allocate @@ Int64.sub mem mem_allocated
       in
       allocate mem;
-      let costs_numa_aware = vm_access_costs h plans (vm_cores, usednodes, plan) in
-      let costs_default = vm_access_costs h plans (vm_cores, Array.to_list nodes, Hierarchy.all h) in
+      let costs_numa_aware = vm_access_costs h plans (vm_cores; usednodes; plan) in
+      let costs_default = vm_access_costs h plans (vm_cores; Array.to_list nodes; Hierarchy.all h) in
       cost_not_worse ~default:costs_default costs_numa_aware;
-      costs_default :: costs_old, costs_numa_aware :: costs_new, ((vm_cores, usednodes), plan) :: plans
-    ) ([], [], []) |> check_aggregate_costs_not_worse
+      costs_default :: costs_old; costs_numa_aware :: costs_new; ((vm_cores; usednodes); plan) :: plans
+    ) ([]; []; []) |> check_aggregate_costs_not_worse
 
-let suite = "topology test",
-            ["Allocation of 1 VM on 1 node", `Quick, test_allocate ~numa:1 ~sockets:1 ~cores:2 ~vms:1
-            ;"Allocation of 10 VMs on 1 node", `Quick, test_allocate ~numa:1 ~sockets:1 ~cores:8 ~vms:10
-            ;"Allocation of 1 VM on 2 nodes", `Quick, test_allocate ~numa:2 ~sockets:2 ~cores:4 ~vms:1
-            ;"Allocation of 10 VM on 2 nodes", `Quick, test_allocate ~numa:2 ~sockets:2 ~cores:4 ~vms:10
-            ;"Allocation of 1 VM on 4 nodes", `Quick, test_allocate ~numa:4 ~sockets:2 ~cores:16 ~vms:1
-            ;"Allocation of 10 VM on 4 nodes", `Quick, test_allocate ~numa:4 ~sockets:2 ~cores:16 ~vms:10
+let suite = "topology test";
+            ["Allocation of 1 VM on 1 node"; `Quick; test_allocate ~numa:1 ~sockets:1 ~cores:2 ~vms:1
+            ;"Allocation of 10 VMs on 1 node"; `Quick; test_allocate ~numa:1 ~sockets:1 ~cores:8 ~vms:10
+            ;"Allocation of 1 VM on 2 nodes"; `Quick; test_allocate ~numa:2 ~sockets:2 ~cores:4 ~vms:1
+            ;"Allocation of 10 VM on 2 nodes"; `Quick; test_allocate ~numa:2 ~sockets:2 ~cores:4 ~vms:10
+            ;"Allocation of 1 VM on 4 nodes"; `Quick; test_allocate ~numa:4 ~sockets:2 ~cores:16 ~vms:1
+            ;"Allocation of 10 VM on 4 nodes"; `Quick; test_allocate ~numa:4 ~sockets:2 ~cores:16 ~vms:10
             ]
