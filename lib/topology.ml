@@ -222,6 +222,8 @@ module Hierarchy : sig
 
   val sharing : t -> CPU.t -> CPU.t -> int
 
+  val nodes: t -> int
+
   val to_string : t -> string
 
   val cpuset_of_node : t -> Node.t -> CPUSet.t
@@ -237,6 +239,8 @@ end = struct
 
   type t = {cpus: CPUIndex.t; distances: Distances.t; node_cpus: Node2CPU.t}
   [@@deriving rpcty]
+
+  let nodes t = Node2CPU.length t.node_cpus
 
   let all t =
     CPUSet.all (CPUIndex.length t.cpus)
