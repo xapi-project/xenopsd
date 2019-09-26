@@ -299,24 +299,24 @@ module Planner = struct
     type t = {
       vcpus: CPU.t;
       mem: int64;
-      hard_affinity: CPUSet.t;
+      affinity: CPUSet.t;
     } [@@deriving rpcty]
 
     let empty = {
       vcpus = CPU.v 0;
       mem = 0L;
-      hard_affinity = CPUSet.empty
+      affinity = CPUSet.empty
     }
 
     let fits vm ~into =
       Int64.compare vm.mem into.mem <= 0 &&
-      CPUSet.(inter vm.hard_affinity into.hard_affinity |> cardinal >= CPU.to_int vm.vcpus)
+      CPUSet.(inter vm.affinity into.affinity |> cardinal >= CPU.to_int vm.vcpus)
 
     let union vm1 vm2 =
-      let hard_affinity = CPUSet.union vm1.hard_affinity vm2.hard_affinity in
-      { vcpus = CPUSet.cardinal hard_affinity |> CPU.v;
+      let affinity = CPUSet.union vm1.affinity vm2.affinity in
+      { vcpus = CPUSet.cardinal affinity |> CPU.v;
         mem = Int64.add vm1.mem vm2.mem;
-        hard_affinity
+        affinity
       }
   end
 
@@ -328,8 +328,8 @@ module Planner = struct
   let v host nodes = { host; nodes }
 
   let vm_allocation_of_node t node =
-    let hard_affinity = Hierarchy.cpuset_of_node t.host node.NUMANode.node in
-    { VM.vcpus = CPUSet.cardinal hard_affinity |> CPU.v; mem = node.NUMANode.memfree; hard_affinity }
+    let affinity = Hierarchy.cpuset_of_node t.host node.NUMANode.node in
+    { VM.vcpus = CPUSet.cardinal affinity |> CPU.v; mem = node.NUMANode.memfree; affinity }
 
   let filter_available t vm =
     { t with nodes = List.filter (fun n ->
@@ -344,7 +344,7 @@ module Planner = struct
     (a + b - 1) / b
 
   let plan t vm =
-    let t = filter_available { t with host = Hierarchy.apply_mask t.host vm.VM.hard_affinity } vm in
+    let t = filter_available { t with host = Hierarchy.apply_mask t.host vm.VM.affinity } vm in
     let max_numa_nodes = Int64.of_int (List.length t.nodes) in
     let plan_on_node node =
       let cpus = Hierarchy.cpuset_of_node t.host node.NUMANode.node |> CPUSet.cardinal in
@@ -376,6 +376,6 @@ module Planner = struct
     D.debug "Picked NUMA nodes: %s" (List.map (to_string NUMANode.typ_of) allocated_nodes |>
                                      String.concat "; ");
     if VM.fits vm ~into:allocated_vm then
-      Some (allocated_nodes, CPUSet.inter allocated_vm.VM.hard_affinity vm.VM.hard_affinity)
+      Some (allocated_nodes, CPUSet.inter allocated_vm.VM.affinity vm.VM.affinity)
     else None
 end

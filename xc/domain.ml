@@ -646,8 +646,8 @@ let numa_placement domid ~vcpus ~memory =
   in
   let planner = Planner.v host nodes in
   (* TODO: parse the vCPU params of the VM *)
-  let hard_affinity = Hierarchy.all host in
-  let vm = {Planner.VM.vcpus = CPU.v vcpus; mem = memory; hard_affinity } in
+  let affinity = Hierarchy.all host in
+  let vm = {Planner.VM.vcpus = CPU.v vcpus; mem = memory; affinity } in
   match Planner.plan planner vm with
   | None ->
     D.debug "NUMA-aware placement failed for domid %d" domid;

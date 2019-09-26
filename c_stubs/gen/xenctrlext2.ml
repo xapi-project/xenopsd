@@ -33,7 +33,7 @@ module Cputopo = struct
     let read s = {
       core = getf s Cputopo.core |> Unsigned.UInt32.to_int;
       socket = getf s Cputopo.socket |> Unsigned.UInt32.to_int;
-      node = getf s Cputopo.socket |> Unsigned.UInt32.to_int
+      node = getf s Cputopo.node |> Unsigned.UInt32.to_int
     } in
     let write _ = failwith "UNIMPLEMENTED" in
     view ~read ~write Cputopo.t

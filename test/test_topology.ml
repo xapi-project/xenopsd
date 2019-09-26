@@ -141,8 +141,8 @@ let test_allocate ~numa ~sockets ~cores ~vms () =
   |> List.fold_left (fun (costs_old, costs_new, plans) i ->
     Topology.D.debug "Planning VM %d" i;
     let p = Planner.v h (Array.to_list nodes) in
-    let hard_affinity = CPUSet.all cores in
-    let vm = Planner.VM.{ vcpus = CPU.v vm_cores; mem; hard_affinity } in
+    let affinity = CPUSet.all cores in
+    let vm = Planner.VM.{ vcpus = CPU.v vm_cores; mem; affinity } in
     match Planner.plan p vm with
     | None -> Alcotest.fail "No NUMA plan"
     | Some (usednodes, plan) ->
