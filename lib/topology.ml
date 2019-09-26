@@ -1,8 +1,84 @@
-module D = Debug.Make (struct
-  let name = "topology"
-end)
+module CPUSet = struct
+  include Set.Make(struct type t = int let compare x y = Pervasives.compare x y end)
+  let pp_dump = Fmt.using to_seq Fmt.(Dump.seq int)
+  let all n =
+    n |> ArrayLabels.init ~f:(fun x -> x)
+    |> ArrayLabels.fold_right ~f:add ~init:empty
+end
 
-let to_string typ_of t = Rpcmarshal.marshal typ_of t |> Jsonrpc.to_string
+module NUMATopology : sig
+  (** NUMA topology information: distances and CPUs *)
+  type t
+  type node = private Node of int
+
+  (** [v distances cpu_to_node] stores the topology.
+   * [distances] is a square matrix, where .(i).(j) is an approximation
+   * to how much slower it is to access memory from node [j] when running on node [i].
+   * Distances are normalized to 10, .(i).(i) must equal to 10.
+   * Usually distances are symmetric .(i).(j) = .(j).(i), but this is not required.
+   * [cpu_to_nodes.(i)] = NUMA node of CPU [i]
+   *
+   * A typical matrix might look like this:
+   *  10 21
+   *  21 10
+   *
+   * A more complicated assymetric distance matrix:
+   *  10 16 16 22 16 22 16 22
+   *  16 10 22 16 16 22 22 17
+   *  16 22 10 16 16 16 16 16
+   *  22 16 16 10 16 16 22 22
+   *  16 16 16 16 10 16 16 22
+   *  22 22 16 16 16 10 22 16
+   *  16 22 16 22 16 22 10 16
+   *  22 16 16 22 22 16 16 10
+   *
+  *)
+  val v: distances:int array array -> cpu_to_node: int array -> t
+
+  val distance: t -> node -> node -> int
+
+  val cpus: t -> node -> CPUSet.t
+
+  val pp_dump_node: node Fmt.t
+  val pp_dump : t Fmt.t
+end = struct
+  type node = Node of int
+
+  (* no mutation is exposed in the interface,
+   * therefore this is immutable *)
+  type t = {
+    distances: int array array;
+    cpu_to_node: node array;
+    node_cpus: CPUSet.t array;
+  }
+
+  let node_of_int i = Node i
+
+  let v ~distances ~cpu_to_node =
+    let node_cpus = Array.map (fun _ -> CPUSet.empty) distances in
+    Array.iteri (fun i node ->
+        node_cpus.(node) <- CPUSet.add i node_cpus.(node)
+    ) cpu_to_node;
+    (* TODO: check topology *)
+    { distances; cpu_to_node = Array.map node_of_int cpu_to_node; node_cpus }
+
+  let cpus t (Node i) = t.node_cpus.(i)
+
+  let distance t (Node a) (Node b) = t.distances.(a).(b)
+
+  let pp_dump_node = Fmt.(using (fun (Node x) -> x) int)
+  let pp_dump =
+    Fmt.(Dump.record
+           [ Dump.field "distances" (fun t -> t.distances) (Dump.array (Dump.array int))
+           ; Dump.field  "cpu2node" (fun t -> t.cpu_to_node) (Dump.array pp_dump_node)
+           ; Dump.field "node_cpus" (fun t -> t.node_cpus) (Dump.array CPUSet.pp_dump)
+    ])
+end
+
+ (* distance: normalized to 10
+  * note that ~0U in Xen means no distance,
+  * which is -1 for us
+  * *)
 
 let check_exn t typ_of properties =
   let errors =
@@ -70,6 +146,7 @@ let typ_of_using aname typ_of ~f ~inv =
  * Hide the array, and only expose read-only accessors.
  * This makes it safe to share the array between multiple copies, knowing it won't change *)
 module Indexed (E : sig
+    de
   type t
 
   val typ_of : t Rpc.Types.typ
@@ -211,7 +288,6 @@ module CPUSet = struct
   let all n =
     let a = Array.init n CPU.v in
     Array.fold_right add a empty
-
 end
 
 module Hierarchy : sig
