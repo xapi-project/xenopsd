@@ -26,7 +26,7 @@ let make_numa_assymetric ~cores_per_numa =
      ; [| 16;16;16;16;10;16;16;22 |]
      ; [| 22;22;16;16;16;10;22;16 |]
      ; [| 16;22;16;22;16;22;10;16 |]
-     ; [| 22;16;16;22;22;16;16;16 |]
+     ; [| 22;16;16;22;22;16;16;10 |]
     |] |> Distances.v in
   let cores = cores_per_numa * numa in
   let cores_per_socket = cores / (numa / 2) in
@@ -77,7 +77,12 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
     all_vms |> List.map snd |>
     List.fold_left CPUSet.union CPUSet.empty in
   let costs = cpuset |> CPUSet.elements |> List.map (fun c ->
-      let distances = List.map (Hierarchy.distance host c) nodes in
+      let distances = List.map (fun node ->
+          let d = Hierarchy.distance host c node in
+          D.debug "CPU %d <-> Node %d distance: %d" (CPU.to_int c) (Node.to_int node) d;
+          d
+      ) nodes in
+      D.debug "Distances: %s" (List.map string_of_int distances |> String.concat ",");
       let worst = List.fold_left max 0 distances in
       let best = List.fold_left min max_int distances in
       let average = float (List.fold_left (+) 0 distances) /. float n in
@@ -120,6 +125,7 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
       D.debug "bandwidth: %f" bandwidth;
       { worst; best; bandwidth; average }
     ) |> sum_costs in
+  D.debug "Costs: %s" (Topology.to_string typ_of costs);
   let cpus = float @@ CPUSet.cardinal cpuset in
   { costs with average = costs.average /. cpus;
                bandwidth = costs.bandwidth *. slice_of vcpus cpuset
@@ -150,9 +156,8 @@ let check_aggregate_costs_not_worse (default, next, _) =
     D.debug "Bandwidth has improved!"
 
 
-let test_allocate h ~vms () =
+let test_allocate ?(mem=Int64.shift_left 1L 30) h ~vms () =
   let memsize = Int64.shift_left 1L 34 in
-  let mem = Int64.shift_left 1L 30 in
   let memfree = memsize in
   let nodes = Array.init (Hierarchy.nodes h) (fun node ->
       Planner.NUMANode.v ~node ~memsize ~memfree) in
@@ -189,6 +194,9 @@ let test_allocate h ~vms () =
       costs_default :: costs_old, costs_numa_aware :: costs_new, ((vm_cores, usednodes), plan) :: plans
     ) ([], [], []) |> check_aggregate_costs_not_worse
 
+
+let mem3 = Int64.div (Int64.mul 4L (Int64.shift_left 1L 34)) 3L
+
 let suite = "topology test",
             ["Allocation of 1 VM on 1 node", `Quick, test_allocate ~vms:1 @@ make_numa ~numa:1 ~sockets:1 ~cores:2
             ;"Allocation of 10 VMs on 1 node", `Quick, test_allocate ~vms:10 @@ make_numa ~numa:1 ~sockets:1 ~cores:8
@@ -197,4 +205,5 @@ let suite = "topology test",
             ;"Allocation of 1 VM on 4 nodes", `Quick, test_allocate ~vms:1 @@ make_numa ~numa:4 ~sockets:2 ~cores:16
             ;"Allocation of 10 VM on 4 nodes", `Quick, test_allocate ~vms:10 @@ make_numa ~numa:4 ~sockets:2 ~cores:16
             ;"Allocation of 10 VM on assymetric nodes", `Quick, test_allocate ~vms:10 (make_numa_assymetric ~cores_per_numa:4)
+            ;"Allocation of 10 VM on assymetric nodes", `Quick, test_allocate ~vms:6 ~mem:mem3 (make_numa_assymetric ~cores_per_numa:4)
             ]

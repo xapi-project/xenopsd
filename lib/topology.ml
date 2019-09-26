@@ -232,6 +232,8 @@ module Hierarchy : sig
 
   val distance: t -> CPU.t -> Node.t -> int
 
+  val distance_node: t -> Node.t -> Node.t -> int
+
   val all: t -> CPUSet.t
   val apply_mask : t -> CPUSet.t -> t
 end = struct
@@ -248,6 +250,8 @@ end = struct
   let node_of_cpu t cpu = (CPUIndex.get t.cpus cpu).CPUTopo.node
   let distance t cpu node2 =
     Distances.distance t.distances (node_of_cpu t cpu) node2
+
+  let distance_node t = Distances.distance t.distances
 
   let invariant t =
     let max_used_node =
@@ -361,10 +365,11 @@ module Planner = struct
     in
     (* 1 split is always better, but when we have multiple splits
      * we need to look at smallest maximum distance,
-     * and smallest average *)
-    let pick_smallest_split lst =
-      let smallest = lst |> List.map fst |> List.fold_left min max_int in
-      List.filter (fun (splits, _) -> splits = smallest) lst
+     * and smallest average, so let the next sorting step pick *)
+    let pick_best_split lst =
+      match List.filter (fun (splits, _) -> splits = 1) lst with
+      | [] -> lst
+      | r -> r
     in
     let node_load_cmp (_, a) (_, b) =
       (* approximation: use free memory *)
@@ -375,9 +380,16 @@ module Planner = struct
       else VM.union allocated_vm (vm_allocation_of_node t candidate),
            candidate :: allocated_nodes
     in
+    let node_distance_cmp r (_, a) (_, b) =
+      (Hierarchy.distance_node t.host r.NUMANode.node a.NUMANode.node) -
+      (Hierarchy.distance_node t.host r.NUMANode.node b.NUMANode.node)
+    in
     let allocated_vm, allocated_nodes =
-      t.nodes |> List.map plan_on_node |> pick_smallest_split |> List.sort node_load_cmp
-      |> List.fold_left pick_nodes (VM.empty, []) in
+      let nodes = t.nodes |> List.map plan_on_node |> pick_best_split |> List.sort node_load_cmp in
+      let _, first = List.hd nodes in
+      let rest =  nodes |> List.tl |> List.sort (node_distance_cmp first) in
+      List.fold_left pick_nodes (vm_allocation_of_node t first, [first]) rest
+    in
     D.debug "Allocated VM: %s, Required VM: %s"
       (to_string VM.typ_of allocated_vm) (to_string VM.typ_of vm);
     D.debug "Picked NUMA nodes: %s" (List.map (to_string NUMANode.typ_of) allocated_nodes |>
