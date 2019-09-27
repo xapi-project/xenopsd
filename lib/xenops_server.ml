@@ -1098,7 +1098,7 @@ let rec atomics_of_operation = function
       | [] -> []
       | vgpus -> [VGPU_start (vgpus, true)]
     in
-    let vgpus = VGPU_DB.list id |> List.map fst in
+    let vgpus = VGPU_DB.vgpus id in
     let no_sharept = List.exists is_no_sharept vgpus in
 
     [ [
