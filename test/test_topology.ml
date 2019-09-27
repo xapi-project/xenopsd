@@ -1,19 +1,19 @@
 open Topology
+module D = Debug.Make (struct
+  let name = "test_topology"
+end)
 
 let make_numa ~numa ~sockets ~cores =
   let distances = Array.init numa (fun i ->
       Array.init numa (fun j ->
           if i = j then 10
           else 10 + 11 * abs (j - i)
-  )) |> Distances.v in
+  )) in
   let cores_per_numa = cores / numa in
-  let cores_per_socket = cores / sockets in
-  let cpus = Array.init cores (fun core ->
-    let node = core / cores_per_numa in
-    let socket = core / cores_per_socket in
-    CPUTopo.v ~core:(core mod cores_per_socket) ~socket ~node
-  ) |> CPUIndex.v in
-  Hierarchy.v cpus distances
+  let cpu_to_node = Array.init cores (fun core ->
+    core / cores_per_numa
+  ) in
+  NUMA.v ~distances ~cpu_to_node
 
 let make_numa_assymetric ~cores_per_numa =
   (* e.g. AMD Opteron 6272 *)
@@ -27,15 +27,11 @@ let make_numa_assymetric ~cores_per_numa =
      ; [| 22;22;16;16;16;10;22;16 |]
      ; [| 16;22;16;22;16;22;10;16 |]
      ; [| 22;16;16;22;22;16;16;10 |]
-    |] |> Distances.v in
-  let cores = cores_per_numa * numa in
-  let cores_per_socket = cores / (numa / 2) in
-  let cpus = Array.init (cores_per_numa * numa) (fun core ->
-      let node = core / cores_per_numa in
-      let socket = core / cores_per_socket in
-      CPUTopo.v ~core:(core mod cores_per_socket) ~socket ~node
-    ) |> CPUIndex.v in
-  Hierarchy.v cpus distances
+    |] in
+  let cpu_to_node = Array.init (cores_per_numa * numa) (fun core ->
+      core / cores_per_numa
+    ) in
+  NUMA.v ~distances ~cpu_to_node
 
 type t = {
   worst: int;
@@ -56,7 +52,6 @@ let sum_costs l =
 
 let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
   let all_vms = ((vcpus, nodes), cpuset) :: all_vms in
-  let nodes = List.map (fun n -> n.Planner.NUMANode.node) nodes in
   let n = List.length nodes in
   let slice_of vcpus cpuset =
     float vcpus /. float (CPUSet.cardinal cpuset) in
@@ -78,8 +73,9 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
     List.fold_left CPUSet.union CPUSet.empty in
   let costs = cpuset |> CPUSet.elements |> List.map (fun c ->
       let distances = List.map (fun node ->
-          let d = Hierarchy.distance host c node in
-          D.debug "CPU %d <-> Node %d distance: %d" (CPU.to_int c) (Node.to_int node) d;
+          let d = NUMA.distance host (NUMA.node_of_cpu host c) node in
+          let NUMA.Node nodei = node in
+          D.debug "CPU %d <-> Node %d distance: %d" c nodei d;
           d
       ) nodes in
       D.debug "Distances: %s" (List.map string_of_int distances |> String.concat ",");
@@ -92,8 +88,8 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
       D.debug "--";
       let all_slices =
         List.fold_left (fun acc ((vcpus, _), cpuset) ->
-            D.debug "CPU %d; CPUSet: %s; slice: %f" (CPU.to_int c)
-              (to_string CPUSet.typ_of cpuset) (slice_of vcpus cpuset);
+            D.debug "CPU %d; CPUSet: %s; slice: %f" c
+              (Fmt.to_to_string CPUSet.pp_dump cpuset) (slice_of vcpus cpuset);
             if CPUSet.mem c cpuset then
               acc +. slice_of vcpus cpuset
             else acc
@@ -106,7 +102,7 @@ let vm_access_costs host all_vms (vcpus, nodes, cpuset) =
       let numa_local_slice =
         1. /. (float
         (CPUSet.inter
-          (Hierarchy.cpuset_of_node host (Hierarchy.node_of_cpu host c))
+          (NUMA.cpuset_of_node host (NUMA.node_of_cpu host c))
           used_cpus
         |> CPUSet.cardinal))
       in

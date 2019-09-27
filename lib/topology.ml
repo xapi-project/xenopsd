@@ -13,7 +13,7 @@
  *)
 
 module D = Debug.Make (struct
-  let name = "xenops"
+  let name = "topology"
 end)
 
 open D
