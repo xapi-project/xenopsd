@@ -1,476 +1,252 @@
+(*
+ * Copyright (C) 2019 Citrix Systems Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation; version 2.1 only. with the special
+ * exception on linking described in file LICENSE.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *)
+
+module D = Debug.Make (struct
+  let name = "xenops"
+end)
+
+open D
+
 module CPUSet = struct
-  include Set.Make(struct type t = int let compare x y = Pervasives.compare x y end)
+  include Set.Make (struct
+    type t = int
+
+    let compare (x : int) (y : int) = compare x y
+  end)
+
   let pp_dump = Fmt.using to_seq Fmt.(Dump.seq int)
+
+  let to_mask t = Array.init (max_elt t) (fun i -> mem i t)
+
   let all n =
-    n |> ArrayLabels.init ~f:(fun x -> x)
+    n
+    |> ArrayLabels.init ~f:(fun x -> x)
     |> ArrayLabels.fold_right ~f:add ~init:empty
 end
 
-module NUMATopology : sig
-  (** NUMA topology information: distances and CPUs *)
-  type t
-  type node = private Node of int
+module NUMAResource = struct
+  type t = {affinity: CPUSet.t; memory: int64; vcpus: int}
 
-  (** [v distances cpu_to_node] stores the topology.
-   * [distances] is a square matrix, where .(i).(j) is an approximation
-   * to how much slower it is to access memory from node [j] when running on node [i].
-   * Distances are normalized to 10, .(i).(i) must equal to 10.
-   * Usually distances are symmetric .(i).(j) = .(j).(i), but this is not required.
-   * [cpu_to_nodes.(i)] = NUMA node of CPU [i]
-   *
-   * A typical matrix might look like this:
-   *  10 21
-   *  21 10
-   *
-   * A more complicated assymetric distance matrix:
-   *  10 16 16 22 16 22 16 22
-   *  16 10 22 16 16 22 22 17
-   *  16 22 10 16 16 16 16 16
-   *  22 16 16 10 16 16 22 22
-   *  16 16 16 16 10 16 16 22
-   *  22 22 16 16 16 10 22 16
-   *  16 22 16 22 16 22 10 16
-   *  22 16 16 22 22 16 16 10
-   *
-  *)
-  val v: distances:int array array -> cpu_to_node: int array -> t
+  let v ~affinity ~memory ~vcpus =
+    if Int64.compare memory 0L < 0 then
+      invalid_arg
+        (Printf.sprintf "NUMAResource: memory cannot be negative: %Ld" memory) ;
+    if vcpus < 0 then
+      invalid_arg (Printf.sprintf "vcpus cannot be negative: %d" vcpus) ;
+    let n = CPUSet.cardinal affinity in
+    if n < vcpus then
+      invalid_arg
+        (Printf.sprintf
+           "Not enough CPUs in affinity set to satisfy %d vCPUs: %d" vcpus n) ;
+    {affinity; memory; vcpus}
 
-  val distance: t -> node -> node -> int
+  let empty = {affinity= CPUSet.empty; memory= 0L; vcpus= 0}
 
-  val cpus: t -> node -> CPUSet.t
+  let fits ~requested ~available =
+    Int64.compare requested.memory available.memory <= 0
+    && CPUSet.(
+         inter requested.affinity available.affinity
+         |> cardinal >= requested.vcpus)
 
-  val pp_dump_node: node Fmt.t
-  val pp_dump : t Fmt.t
-end = struct
+  let union a b =
+    v
+      ~affinity:(CPUSet.union a.affinity b.affinity)
+      ~memory:(Int64.add a.memory b.memory)
+      ~vcpus:(a.vcpus + b.vcpus)
+
+  let shrink a b =
+    v
+      ~affinity:(CPUSet.diff a.affinity b.affinity)
+      ~memory:(Int64.sub a.memory b.memory)
+      ~vcpus:(a.vcpus - b.vcpus)
+
+  let available t =
+    Int64.compare t.memory 0L > 0
+    && (not @@ CPUSet.is_empty t.affinity)
+    && t.vcpus > 0
+
+  let roundup_div64 a b = Int64.div (Int64.add a (Int64.pred b)) b
+
+  let roundup_div a b = (a + b - 1) / b
+
+  let min_splits_mem ~node ~vm ~max_available_mem_per_node =
+    (* if this node cannot satisfy the VM's memory requirements,
+     * other nodes will have to *)
+    let need_from_others = max 0L (Int64.sub vm.memory node.memory) in
+    (* to calculate the minimum assume all other nodes have [max_available_mem_per_node],
+     * the actual number of splits might be greater than the minimum
+     * *)
+    let min_other_splits =
+      roundup_div64 need_from_others max_available_mem_per_node
+    in
+    Int64.add 1L min_other_splits |> Int64.to_int
+
+  let min_splits_cpu ~node ~vm = max 1 (roundup_div vm.vcpus node.vcpus)
+
+  let ideal_split ~node ~vm =
+    (* an ideal split is a balanced split *)
+    List.fold_left max 0
+      [ 1
+      ; roundup_div64 vm.memory node.memory |> Int64.to_int
+      ; roundup_div vm.vcpus node.vcpus ]
+
+  let pp_dump =
+    Fmt.(
+      Dump.record
+        [ Dump.field "affinity" (fun t -> t.affinity) CPUSet.pp_dump
+        ; Dump.field "memory" (fun t -> t.memory) int64
+        ; Dump.field "vcpus" (fun t -> t.vcpus) int ])
+end
+
+module NUMA = struct
   type node = Node of int
 
   (* no mutation is exposed in the interface,
    * therefore this is immutable *)
-  type t = {
-    distances: int array array;
-    cpu_to_node: node array;
-    node_cpus: CPUSet.t array;
-  }
+  type t =
+    { distances: int array array
+    ; cpu_to_node: node array
+    ; node_cpus: CPUSet.t array
+    ; all: CPUSet.t }
 
   let node_of_int i = Node i
 
-  let v ~distances ~cpu_to_node =
-    let node_cpus = Array.map (fun _ -> CPUSet.empty) distances in
-    Array.iteri (fun i node ->
-        node_cpus.(node) <- CPUSet.add i node_cpus.(node)
-    ) cpu_to_node;
-    (* TODO: check topology *)
-    { distances; cpu_to_node = Array.map node_of_int cpu_to_node; node_cpus }
+  let pp_dump_distances = Fmt.(int |> Dump.array |> Dump.array)
 
-  let cpus t (Node i) = t.node_cpus.(i)
+  let v ~distances ~cpu_to_node =
+    debug "Distances: %s" (Fmt.to_to_string pp_dump_distances distances) ;
+    debug "CPU2Node: %s" (Fmt.to_to_string Fmt.(Dump.array int) cpu_to_node) ;
+    let node_cpus = Array.map (fun _ -> CPUSet.empty) distances in
+    Array.iteri
+      (fun i node -> node_cpus.(node) <- CPUSet.add i node_cpus.(node))
+      cpu_to_node ;
+    Array.iteri
+      (fun i row ->
+        let d = distances.(i).(i) in
+        if d <> 10 then
+          invalid_arg
+            (Printf.sprintf "NUMA distance from node to itself must be 10: %d"
+               d) ;
+        Array.iteri
+          (fun j d ->
+            if d < 10 then
+              invalid_arg (Printf.sprintf "NUMA distance must be >= 10: %d" d))
+          row)
+      distances ;
+    let all = Array.fold_left CPUSet.union CPUSet.empty node_cpus in
+    {distances; cpu_to_node= Array.map node_of_int cpu_to_node; node_cpus; all}
 
   let distance t (Node a) (Node b) = t.distances.(a).(b)
 
-  let pp_dump_node = Fmt.(using (fun (Node x) -> x) int)
-  let pp_dump =
-    Fmt.(Dump.record
-           [ Dump.field "distances" (fun t -> t.distances) (Dump.array (Dump.array int))
-           ; Dump.field  "cpu2node" (fun t -> t.cpu_to_node) (Dump.array pp_dump_node)
-           ; Dump.field "node_cpus" (fun t -> t.node_cpus) (Dump.array CPUSet.pp_dump)
-    ])
-end
+  let cpuset_of_node t (Node i) = t.node_cpus.(i)
 
- (* distance: normalized to 10
-  * note that ~0U in Xen means no distance,
-  * which is -1 for us
-  * *)
+  let node_of_cpu t i = t.cpu_to_node.(i)
 
-let check_exn t typ_of properties =
-  let errors =
-    properties |> List.filter (fun (_, f) -> not @@ f t) |> List.map fst
-  in
-  match errors with
-  | [] ->
-      ()
-  | errors ->
-      let debug = to_string typ_of t in
-      invalid_arg (Printf.sprintf "%s: %s" (String.concat ";\n" errors) debug)
+  let nodes t = Array.length t.distances
 
-(** BoundedInt(T).t will always be in the [gte, lt) range by construction.
- * There are a lot of integer-like types here: a functor is used to create a unique
- * type for each to avoid mixing CPU core number with NUMA index for example.
- * *)
-module BoundedInt (E : sig
-  val gte : int
-
-  val lt : int
-end) : sig
-  type t = private int
-  (** We allow the compiler to see it is an int, but the only way to
-   * construct one is via the provided [v] function *)
-
-  val typ_of : t Rpc.Types.typ
-
-  val v : int -> t
-  (** [v i] is equivalent to [i].
-   * Raises an exception if outside [gte, lt) range. *)
-
-  val to_int : t -> int
-
-  val compare : t -> t -> int
-end = struct
-  type t = int [@@deriving rpcty]
-
-  let v n =
-    let ok = n >= E.gte && n < E.lt in
-    if not ok then
-      invalid_arg
-      @@ Printf.sprintf "expected range: %d <= %d < %d" E.gte n E.lt
-    else n
-
-  let compare a b = a - b
-
-  let to_int x = x
-end
-
-(* helper for writing typ_of that cannot be automatically derived *)
-let typ_of_using aname typ_of ~f ~inv =
-  let open Rpc.Types in
-  let rpc_of d = Rpcmarshal.marshal typ_of @@ f d in
-  let of_rpc r =
-    match Rpcmarshal.unmarshal typ_of r with
-    | Ok r ->
-        Ok (inv r)
-    | Error e ->
-        Error e
-  in
-  Abstract {aname; test_data= []; rpc_of; of_rpc}
-
-(* All data structures used here are immutable,
- * however an array is mutable.
- * Hide the array, and only expose read-only accessors.
- * This makes it safe to share the array between multiple copies, knowing it won't change *)
-module Indexed (E : sig
-    de
-  type t
-
-  val typ_of : t Rpc.Types.typ
-end) : sig
-  type t
-
-  val typ_of : t Rpc.Types.typ
-
-  val v : E.t array -> t
-
-  val get : t -> int -> E.t
-
-  val iter : (E.t -> unit) -> t -> unit
-  val iteri : (int -> E.t -> unit) -> t -> unit
-
-  val fold_left : ('a -> E.t -> 'a) -> 'a -> t -> 'a
-
-  val length : t -> int
-
-  val map : (E.t -> E.t) -> t -> t
-end = struct
-  type t = E.t array [@@deriving rpcty]
-
-  let v a = a
-
-  let get a i = a.(i)
-
-  let iter = Array.iter
-
-  let iteri = Array.iteri
-
-  let fold_left = Array.fold_left
-
-  let length = Array.length
-
-  let map = Array.map
-end
-
-(* Xen's maximum *)
-let max_cpu = 512
-
-let max_nodes = max_cpu
-
-(** A NUMA node.
- * Accessing memory on a local NUMA node
- * is signficantly faster than on a remote NUMA node
- * *)
-module Node = BoundedInt (struct
-  let gte = 0
-
-  let lt = max_nodes
-end)
-
-(** A CPU logical core, the smallest unit of scheduling granularity *)
-module CPU = BoundedInt (struct
-  let gte = 0
-
-  let lt = max_cpu
-end)
-
-module CPUHier = BoundedInt (struct
-  let gte = 0
-
-  let lt = max_cpu
-end)
-
-(** Topology showing the physical hierarchy of a core,
- * and the memory hierarchy (NUMA node) *)
-module CPUTopo = struct
-  type t = {core: CPUHier.t; node: Node.t; hier: CPUHier.t list} [@@deriving rpcty]
-
-  let v ~core ~socket ~node =
-    let core = CPUHier.v core in
-    let socket = CPUHier.v socket in
-    let node = Node.v node in
-    {core; node; hier= [socket; core]}
-
-  let rec sharing level a b =
-    match (a, b) with
-    | e1 :: tl1, e2 :: tl2 ->
-        if e1 = e2 then sharing (level + 1) tl1 tl2
-        else level (* stop when not shared *)
-    | [], [] ->
-        level
-    | _ :: _, [] | [], _ :: _ ->
-        assert false
-
-  (** [sharing a b] returns the number of HW resources shared between the cores. *)
-  let sharing a b =
-    let numa_shared = if a.node = b.node then 1 else 0 in
-    sharing numa_shared a.hier b.hier
-end
-
-module Distances : sig
-  (** Distances between NUMA nodes *)
-  type t
-
-  val v: int array array -> t
-
-  val typ_of : t Rpc.Types.typ
-
-  (** [nodes t] is the number of NUMA nodes *)
-  val nodes : t -> int
-
-  (** [distance t a b] is the distance between node [a] and [b] *)
-  val distance : t -> Node.t -> Node.t -> int
-end = struct
-  type t = int array array [@@deriving rpcty]
-
-  let nodes = Array.length
-
-  let v t =
-    let n = Array.length t in
-    assert (Array.for_all (fun a -> Array.length a = n) t) ;
-    t
-
-  let distance t a b = t.(Node.to_int a).(Node.to_int b)
-end
-
-(* Quick access to topology information about a core *)
-module CPUIndex = struct
-  include Indexed (CPUTopo)
-
-  let get t c = get t (CPU.to_int c)
-end
-
-(** CPU set or CPU mask: used for hard and soft affinity. *)
-module CPUSet = struct
-  include Set.Make (CPU)
-
-  type cpus = CPU.t list [@@deriving rpcty]
-
-  let typ_of =
-    let open Rpc.Types in
-    let rpc_of t = Rpcmarshal.marshal typ_of_cpus (elements t) in
-    let of_rpc _ = assert false in
-    Abstract {aname= "cpuset"; test_data= []; rpc_of; of_rpc}
-
-  let all n =
-    let a = Array.init n CPU.v in
-    Array.fold_right add a empty
-end
-
-module Hierarchy : sig
-  type t
-  val typ_of: t Rpc.Types.typ
-
-  val v: CPUIndex.t -> Distances.t -> t
-
-  val sharing : t -> CPU.t -> CPU.t -> int
-
-  val nodes: t -> int
-
-  val to_string : t -> string
-
-  val cpuset_of_node : t -> Node.t -> CPUSet.t
-
-  val node_of_cpu: t -> CPU.t -> Node.t
-
-  val distance: t -> CPU.t -> Node.t -> int
-
-  val distance_node: t -> Node.t -> Node.t -> int
-
-  val all: t -> CPUSet.t
-  val apply_mask : t -> CPUSet.t -> t
-end = struct
-  module Node2CPU = Indexed (CPUSet)
-
-  type t = {cpus: CPUIndex.t; distances: Distances.t; node_cpus: Node2CPU.t}
-  [@@deriving rpcty]
-
-  let nodes t = Node2CPU.length t.node_cpus
-
-  let all t =
-    CPUSet.all (CPUIndex.length t.cpus)
-
-  let node_of_cpu t cpu = (CPUIndex.get t.cpus cpu).CPUTopo.node
-  let distance t cpu node2 =
-    Distances.distance t.distances (node_of_cpu t cpu) node2
-
-  let distance_node t = Distances.distance t.distances
-
-  let invariant t =
-    let max_used_node =
-      CPUIndex.fold_left
-        (fun a c -> max a @@ Node.to_int c.CPUTopo.node)
-        0 t.cpus
-    in
-    let max_node = max_used_node + 1 in
-    let distances_ok t = Distances.nodes t.distances >= max_node in
-    let nodes_ok t = Node2CPU.length t.node_cpus = max_node in
-    check_exn t typ_of
-      [ ("Distances available for all NUMA nodes", distances_ok)
-      ; (Printf.sprintf "All NUMA nodes have a CPUSet: %d = %d"
-           (Node2CPU.length t.node_cpus)
-           max_node, nodes_ok) ]
-
-  let v cpus distances =
-    let nodes = Distances.nodes distances in
-    let node_cpus = Array.init nodes (fun _ -> CPUSet.empty) in
-    CPUIndex.iteri
-      (fun i c ->
-        let n = Node.to_int c.CPUTopo.node in
-        node_cpus.(n) <- CPUSet.add (CPU.v i) node_cpus.(n))
-      cpus ;
-    let t = {cpus; distances; node_cpus= Node2CPU.v node_cpus} in
-    invariant t ; t
-
-  let sharing t a b =
-    let cpu i = CPUIndex.get t.cpus i in
-    CPUTopo.sharing (cpu a) (cpu b)
-
-  let to_string = to_string typ_of
-
-  let cpuset_of_node t n = Node2CPU.get t.node_cpus (Node.to_int n)
+  let all_cpus t = t.all
 
   let apply_mask t mask =
-    let node_cpus = Node2CPU.map (CPUSet.inter mask) t.node_cpus in
-    {t with node_cpus}
+    let node_cpus = Array.map (CPUSet.inter mask) t.node_cpus in
+    let all = CPUSet.inter t.all mask in
+    {t with node_cpus; all}
+
+  let resources t nodes =
+    nodes
+    |> List.mapi (fun i n -> (Node i, n))
+    |> List.filter (fun (_, n) -> NUMAResource.available n)
+
+  let pp_dump_node = Fmt.(using (fun (Node x) -> x) int)
+
+  let pp_dump =
+    Fmt.(
+      Dump.record
+        [ Dump.field "distances"
+            (fun t -> t.distances)
+            (Dump.array (Dump.array int))
+        ; Dump.field "cpu2node"
+            (fun t -> t.cpu_to_node)
+            (Dump.array pp_dump_node)
+        ; Dump.field "node_cpus"
+            (fun t -> t.node_cpus)
+            (Dump.array CPUSet.pp_dump) ])
 end
 
-module Planner = struct
-  module NUMANode = struct
-    type t = {
-      node: Node.t;
-      memsize: int64;
-      memfree: int64;
-    } [@@deriving rpcty]
-
-    let v ~node ~memsize ~memfree =
-      { node = Node.v node; memsize; memfree }
-  end
-  module VM = struct
-    type t = {
-      vcpus: CPU.t;
-      mem: int64;
-      affinity: CPUSet.t;
-    } [@@deriving rpcty]
-
-    let empty = {
-      vcpus = CPU.v 0;
-      mem = 0L;
-      affinity = CPUSet.empty
-    }
-
-    let fits vm ~into =
-      Int64.compare vm.mem into.mem <= 0 &&
-      CPUSet.(inter vm.affinity into.affinity |> cardinal >= CPU.to_int vm.vcpus)
-
-    let union vm1 vm2 =
-      let affinity = CPUSet.union vm1.affinity vm2.affinity in
-      { vcpus = CPUSet.cardinal affinity |> CPU.v;
-        mem = Int64.add vm1.mem vm2.mem;
-        affinity
-      }
-  end
-
-  type t = {
-    host: Hierarchy.t;
-    nodes: NUMANode.t list;
-  } [@@deriving rpcty]
-
-  let v host nodes = { host; nodes }
-
-  let vm_allocation_of_node t node =
-    let affinity = Hierarchy.cpuset_of_node t.host node.NUMANode.node in
-    { VM.vcpus = CPUSet.cardinal affinity |> CPU.v; mem = node.NUMANode.memfree; affinity }
-
-  let filter_available t vm =
-    { t with nodes = List.filter (fun n ->
-          n.NUMANode.memfree > 0L &&
-          not @@ CPUSet.is_empty (Hierarchy.cpuset_of_node t.host n.NUMANode.node)
-        ) t.nodes }
-
-  let roundup_div64 a b =
-    Int64.div (Int64.add a (Int64.pred b)) b
-
-  let roundup_div a b =
-    (a + b - 1) / b
-
-  let plan t vm =
-    let t = filter_available { t with host = Hierarchy.apply_mask t.host vm.VM.affinity } vm in
-    let max_numa_nodes = Int64.of_int (List.length t.nodes) in
-    let plan_on_node node =
-      let cpus = Hierarchy.cpuset_of_node t.host node.NUMANode.node |> CPUSet.cardinal in
-      let splits_mem = max 1L @@ min max_numa_nodes (roundup_div64 vm.VM.mem node.NUMANode.memfree) in
-      let splits_cpu = max 1 @@ roundup_div (CPU.to_int vm.VM.vcpus) cpus in
-      let splits = max (Int64.to_int splits_mem) splits_cpu in
-      D.debug "Node %d: %d (%Ld; %d) splits" (Node.to_int node.NUMANode.node)
-        splits splits_mem splits_cpu;
-      splits, node
+let plan host nodes ~vm =
+  let host = NUMA.apply_mask host vm.NUMAResource.affinity in
+  let max_numa_nodes = List.length nodes in
+  let max_available_mem_per_node =
+    nodes
+    |> List.map (fun (_, n) -> n.NUMAResource.memory)
+    |> List.fold_left max 0L
+  in
+  let plan_on_node (nodeidx, node) =
+    let splits_mem =
+      NUMAResource.min_splits_mem ~node ~vm ~max_available_mem_per_node
     in
-    (* 1 split is always better, but when we have multiple splits
-     * we need to look at smallest maximum distance,
-     * and smallest average, so let the next sorting step pick *)
-    let pick_best_split lst =
-      match List.filter (fun (splits, _) -> splits = 1) lst with
-      | [] -> lst
-      | r -> r
+    let splits_cpu = NUMAResource.min_splits_cpu ~node ~vm in
+    let splits = min max_numa_nodes (max splits_mem splits_cpu) in
+    (* an ideal split is a balanced split *)
+    let ideal_splits = NUMAResource.ideal_split ~node ~vm in
+    let (NUMA.Node nodei) = nodeidx in
+    debug "Node %d: %d splits (%d mem; %d cpu), ideal: %d" nodei splits
+      splits_mem splits_cpu ideal_splits ;
+    (splits, ideal_splits, nodeidx, node)
+  in
+  let node_smallest_split (split1, ideal1, _, node1) (split2, ideal2, _, node2)
+      =
+    (* prefer smallest minimum split *)
+    let r = split1 - split2 in
+    if r = 0 then
+      (* then pick smallest ideal split for balancing nodes *)
+      let r = ideal1 - ideal2 in
+      if r = 0 then
+        (* then pick node with most free memory for balancing *)
+        Int64.compare node2.NUMAResource.memory node1.NUMAResource.memory
+      else r
+    else r
+  in
+  let nodes =
+    nodes |> List.map plan_on_node |> List.sort node_smallest_split
+  in
+  let _, _, first, firstnode = List.hd nodes in
+  let node_smallest_distance (_, _, node1, _) (_, _, node2, _) =
+    let d node =
+      NUMA.distance host first node + NUMA.distance host node first
     in
-    let node_load_cmp (_, a) (_, b) =
-      (* approximation: use free memory *)
-      Int64.compare b.NUMANode.memfree a.NUMANode.memfree
-    in
-    let pick_nodes (allocated_vm, allocated_nodes) (_, candidate) =
-      if VM.fits vm ~into:allocated_vm then (allocated_vm, allocated_nodes)
-      else VM.union allocated_vm (vm_allocation_of_node t candidate),
-           candidate :: allocated_nodes
-    in
-    let node_distance_cmp r (_, a) (_, b) =
-      (Hierarchy.distance_node t.host r.NUMANode.node a.NUMANode.node) -
-      (Hierarchy.distance_node t.host r.NUMANode.node b.NUMANode.node)
-    in
-    let allocated_vm, allocated_nodes =
-      let nodes = t.nodes |> List.map plan_on_node |> pick_best_split |> List.sort node_load_cmp in
-      let _, first = List.hd nodes in
-      let rest =  nodes |> List.tl |> List.sort (node_distance_cmp first) in
-      List.fold_left pick_nodes (vm_allocation_of_node t first, [first]) rest
-    in
-    D.debug "Allocated VM: %s, Required VM: %s"
-      (to_string VM.typ_of allocated_vm) (to_string VM.typ_of vm);
-    D.debug "Picked NUMA nodes: %s" (List.map (to_string NUMANode.typ_of) allocated_nodes |>
-                                     String.concat "; ");
-    if VM.fits vm ~into:allocated_vm then
-      Some (allocated_nodes, CPUSet.inter allocated_vm.VM.affinity vm.VM.affinity)
-    else None
-end
+    compare (d node1) (d node2)
+  in
+  let pick_node (allocated, requested) (_, _, _, candidate) =
+    if NUMAResource.fits ~requested ~available:allocated then
+      (allocated, requested)
+    else
+      ( NUMAResource.union allocated candidate
+      , NUMAResource.shrink requested candidate )
+  in
+  (* we could've applied the smallest distance recursively,
+   * but to avoid O(n^2) we apply it just to the first *)
+  let allocated, remaining =
+    nodes |> List.tl
+    |> List.sort node_smallest_distance
+    |> ListLabels.fold_left ~f:pick_node ~init:(firstnode, vm)
+  in
+  debug "Allocated resources: %s"
+    (Fmt.to_to_string NUMAResource.pp_dump allocated) ;
+  debug "Requested resources: %s" (Fmt.to_to_string NUMAResource.pp_dump vm) ;
+  if NUMAResource.available remaining then (
+    (* There are still resources to be allocated, give up *)
+    debug "Unable to allocate, remaining: %s"
+      (Fmt.to_to_string NUMAResource.pp_dump remaining) ;
+    None )
+  else Some allocated.NUMAResource.affinity
