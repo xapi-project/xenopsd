@@ -627,34 +627,30 @@ let numa_hierarchy =
   let open Xenctrlext2 in
   let open Topology in
   Lazy.from_fun (fun () ->
-      Xenctrlext2.(with_xc cputopoinfo) |> Array.map (fun t ->
-          CPUTopo.v ~core:t.Cputopo.core ~socket:t.Cputopo.socket ~node:t.Cputopo.node) |> Topology.CPUIndex.v)
+      let _, distances = Xenctrlext2.(with_xc numainfo) in
+      let cpu_to_node = Xenctrlext2.(with_xc cputopoinfo) |> Array.map (fun t -> t.Cputopo.node) in
+      NUMA.v ~distances ~cpu_to_node)
 
 let numa_placement domid ~vcpus ~memory =
   let open Xenctrlext2 in
   let open Topology in
   (* TODO: mutex *)
-  let cpus = Lazy.force numa_hierarchy in
-  let numa_meminfo, numa_distances = Xenctrlext2.(with_xc numainfo) in
-  let distances = Distances.v numa_distances in
-  let host = Hierarchy.v cpus distances in
+  let host = Lazy.force numa_hierarchy in
+  let numa_meminfo = Xenctrlext2.(with_xc numainfo) |> fst |> Array.to_list in
   let nodes =
-    numa_meminfo |>
-    Array.mapi (fun i m ->
-        Planner.NUMANode.v ~node:i ~memfree:m.Meminfo.memfree ~memsize:m.Meminfo.memsize)
-    |> Array.to_list
+    ListLabels.map2 (NUMA.nodes host) numa_meminfo ~f:(fun node m ->
+        let affinity = NUMA.cpuset_of_node host node in
+        let vcpus = CPUSet.cardinal affinity in
+        node, NUMAResource.v ~affinity ~memory:m.Meminfo.memfree ~vcpus)
   in
-  let planner = Planner.v host nodes in
-  (* TODO: parse the vCPU params of the VM *)
-  let affinity = Hierarchy.all host in
-  let vm = {Planner.VM.vcpus = CPU.v vcpus; mem = memory; affinity } in
-  match Planner.plan planner vm with
+  (* TODO: parse the vCPU params of the VM, or ignore plan completely when hard affinity is set *)
+  let affinity = NUMA.all_cpus host in
+  let vm = NUMAResource.v ~affinity ~memory ~vcpus in
+  match plan host nodes vm with
   | None ->
     D.debug "NUMA-aware placement failed for domid %d" domid;
-  | Some (_, soft_affinity) ->
-    let n = soft_affinity |> CPUSet.max_elt |> CPU.to_int in
-    let cpua = Array.init n (fun i ->
-        CPUSet.mem (CPU.v i) soft_affinity) |> Array.to_list in
+  | Some (soft_affinity) ->
+    let cpua = CPUSet.to_mask soft_affinity |> Array.to_list in
     Xenctrlext2.with_xc (fun xc ->
         for i = 0 to vcpus - 1 do
           Xenctrlext2.vcpu_setaffinity xc domid i None (Some cpua)

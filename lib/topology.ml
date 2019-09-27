@@ -139,7 +139,7 @@ module NUMA = struct
             (Printf.sprintf "NUMA distance from node to itself must be 10: %d"
                d) ;
         Array.iteri
-          (fun j d ->
+          (fun _ d ->
             if d < 10 then
               invalid_arg (Printf.sprintf "NUMA distance must be >= 10: %d" d))
           row)
@@ -153,7 +153,7 @@ module NUMA = struct
 
   let node_of_cpu t i = t.cpu_to_node.(i)
 
-  let nodes t = Array.length t.distances
+  let nodes t = Array.mapi (fun i _ -> Node i) t.distances |> Array.to_list
 
   let all_cpus t = t.all
 
@@ -161,11 +161,6 @@ module NUMA = struct
     let node_cpus = Array.map (CPUSet.inter mask) t.node_cpus in
     let all = CPUSet.inter t.all mask in
     {t with node_cpus; all}
-
-  let resources t nodes =
-    nodes
-    |> List.mapi (fun i n -> (Node i, n))
-    |> List.filter (fun (_, n) -> NUMAResource.available n)
 
   let pp_dump_node = Fmt.(using (fun (Node x) -> x) int)
 
