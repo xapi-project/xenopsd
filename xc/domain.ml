@@ -639,9 +639,7 @@ let numa_placement domid ~vcpus ~memory =
   let numa_meminfo = Xenctrlext2.(with_xc numainfo) |> fst |> Array.to_list in
   let nodes =
     ListLabels.map2 (NUMA.nodes host) numa_meminfo ~f:(fun node m ->
-        let affinity = NUMA.cpuset_of_node host node in
-        let vcpus = CPUSet.cardinal affinity in
-        node, NUMAResource.v ~affinity ~memory:m.Meminfo.memfree ~vcpus)
+        node, NUMA.resource host node ~memory:m.Meminfo.memfree)
   in
   (* TODO: parse the vCPU params of the VM, or ignore plan completely when hard affinity is set *)
   let affinity = NUMA.all_cpus host in

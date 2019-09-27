@@ -17,7 +17,7 @@ module Meminfo = struct
         memfree = getf s Meminfo.memfree |> Unsigned.UInt64.to_int64
       }
       in
-      let write { memsize; memfree } = failwith "UNIMPLEMENTED" in
+      let write _ = failwith "UNIMPLEMENTED" in
       view ~read ~write Meminfo.t
 end
 
@@ -40,12 +40,6 @@ module Cputopo = struct
 end
 
 type t = handle
-let with_xc f =
-  Xenctrl.with_intf (fun xc ->
-    (* FIXME *)
-    let xcptr : nativeint = Obj.magic xc in
-    f (Ctypes.ptr_of_raw_address xcptr))
-
 let check_xc r =
   if r < 0 then failwith "TODO: xc failed"
 

@@ -68,8 +68,8 @@ module NUMAResource = struct
   let shrink a b =
     v
       ~affinity:(CPUSet.diff a.affinity b.affinity)
-      ~memory:(Int64.sub a.memory b.memory)
-      ~vcpus:(a.vcpus - b.vcpus)
+      ~memory:(max 0L (Int64.sub a.memory b.memory))
+      ~vcpus:(max 0 (a.vcpus - b.vcpus))
 
   let available t =
     Int64.compare t.memory 0L > 0
@@ -162,6 +162,11 @@ module NUMA = struct
     let all = CPUSet.inter t.all mask in
     {t with node_cpus; all}
 
+  let resource t node ~memory =
+    let affinity = cpuset_of_node t node in
+    let vcpus = CPUSet.cardinal affinity in
+    NUMAResource.v ~affinity ~memory ~vcpus
+
   let pp_dump_node = Fmt.(using (fun (Node x) -> x) int)
 
   let pp_dump =
@@ -215,7 +220,7 @@ let plan host nodes ~vm =
   let nodes =
     nodes |> List.map plan_on_node |> List.sort node_smallest_split
   in
-  let _, _, first, firstnode = List.hd nodes in
+  let ((_, _, first, _) as firstnode) = List.hd nodes in
   let node_smallest_distance (_, _, node1, _) (_, _, node2, _) =
     let d node =
       NUMA.distance host first node + NUMA.distance host node first
@@ -223,18 +228,22 @@ let plan host nodes ~vm =
     compare (d node1) (d node2)
   in
   let pick_node (allocated, requested) (_, _, _, candidate) =
-    if NUMAResource.fits ~requested ~available:allocated then
-      (allocated, requested)
-    else
-      ( NUMAResource.union allocated candidate
-      , NUMAResource.shrink requested candidate )
+    D.debug "requested: %s, allocated: %s"
+      (Fmt.to_to_string NUMAResource.pp_dump requested)
+      (Fmt.to_to_string NUMAResource.pp_dump allocated) ;
+    ( NUMAResource.union allocated candidate
+    , if NUMAResource.fits ~requested ~available:allocated then
+        NUMAResource.empty
+      else NUMAResource.shrink requested candidate )
   in
   (* we could've applied the smallest distance recursively,
    * but to avoid O(n^2) we apply it just to the first *)
   let allocated, remaining =
     nodes |> List.tl
     |> List.sort node_smallest_distance
-    |> ListLabels.fold_left ~f:pick_node ~init:(firstnode, vm)
+    |> fun tl ->
+    ListLabels.fold_left ~f:pick_node ~init:(NUMAResource.empty, vm)
+      (firstnode :: tl)
   in
   debug "Allocated resources: %s"
     (Fmt.to_to_string NUMAResource.pp_dump allocated) ;
