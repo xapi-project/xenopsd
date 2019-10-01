@@ -937,7 +937,7 @@ let rec atomics_of_operation = function
     let vgpus = VGPU_DB.vgpus id in
     let pcis = PCI_DB.pcis id |> pci_plug_order in
     let vusbs = VUSB_DB.vusbs id in
-    let pcis_other = List.filter (is_not_nvidia_sriov vgpus) pcis in
+    let pcis_sriov, pcis_other = List.partition (is_nvidia_sriov vgpus) pcis in
     let no_sharept = List.exists is_no_sharept vgpus in
     [ [
         VM_hook_script (id, Xenops_hooks.VM_pre_start, Xenops_hooks.reason__none);
@@ -961,7 +961,7 @@ let rec atomics_of_operation = function
     ; List.map (fun vif -> VIF_set_active (vif.Vif.id, true)) vifs
     ; List.map (fun vif -> VIF_plug vif.Vif.id) vifs
     ; List.map (fun vgpu -> VGPU_set_active (vgpu.Vgpu.id, true)) vgpus
-    (* Nvidia SRIOV PCI devices have been already been plugged *)
+    ; List.map (fun pci -> PCI_plug(pci.Pci.id, false)) pcis_sriov
     ; [
         VM_create_device_model (id, false)
       ]
