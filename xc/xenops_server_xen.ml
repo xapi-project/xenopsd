@@ -1027,6 +1027,7 @@ module VM = struct
     let pci_passthrough =
       match vm.ty with
       | HVM { pci_passthrough = true } -> true
+      | PV  { pci_passthrough = true } -> true
       | _ -> false in
 
     {
