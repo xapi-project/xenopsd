@@ -23,6 +23,8 @@ external domain_get_acpi_s_state: handle -> domid -> int = "stub_xenctrlext_doma
 
 external domain_suppress_spurious_page_faults: handle -> domid -> unit = "stub_xenctrlext_domain_suppress_spurious_page_faults"
 
+exception Unix_error of Unix.error * string
+
 type runstateinfo = {
   state : int32;
   missed_changes: int32;
@@ -40,3 +42,9 @@ external domain_get_runstate_info : handle -> int -> runstateinfo = "stub_xenctr
 external get_max_nr_cpus: handle -> int = "stub_xenctrlext_get_max_nr_cpus"
 
 external domain_set_target: handle -> domid -> domid -> unit = "stub_xenctrlext_domain_set_target"
+
+external assign_device: handle -> domid -> int -> int -> unit = "stub_xenctrlext_assign_device"
+
+external deassign_device: handle -> domid -> int -> unit = "stub_xenctrlext_deassign_device"
+
+external domid_quarantine: unit -> int = "stub_xenctrlext_domid_quarantine"

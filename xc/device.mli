@@ -200,7 +200,7 @@ sig
 
   exception Cannot_use_pci_with_no_pciback of t list
 
-  val add : xs:Xenstore.Xs.xsh -> address list -> Xenctrl.domid -> unit
+  val add : xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> address list -> Xenctrl.domid -> unit
   val release : address list -> Xenctrl.domid -> unit
   val reset : xs:Xenstore.Xs.xsh -> address -> unit
   val bind : address list -> supported_driver -> unit
@@ -281,13 +281,13 @@ sig
     -> int  (** domid *)
     -> qemu_args
 
-  val start : Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> dm:Profile.t -> ?timeout:float -> info -> Xenctrl.domid -> unit
-  val restore : Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> dm:Profile.t -> ?timeout:float -> info -> Xenctrl.domid -> unit
+  val start : Xenops_task.task_handle -> xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> dm:Profile.t -> ?timeout:float -> info -> Xenctrl.domid -> unit
+  val restore : Xenops_task.task_handle -> xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> dm:Profile.t -> ?timeout:float -> info -> Xenctrl.domid -> unit
   val assert_can_suspend : xs:Xenstore.Xs.xsh -> dm:Profile.t -> Xenctrl.domid -> unit
   val suspend : Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> qemu_domid:int -> dm:Profile.t -> Xenctrl.domid -> unit
   val resume : Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> qemu_domid:int -> Xenctrl.domid -> unit
   val stop : xs:Xenstore.Xs.xsh -> qemu_domid:int -> dm:Profile.t -> Xenctrl.domid -> unit
-  val restore_vgpu : Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> Xenctrl.domid  -> Xenops_interface.Vgpu.t -> int -> Profile.t  -> unit
+  val restore_vgpu : Xenops_task.task_handle -> xc:Xenctrl.handle -> xs:Xenstore.Xs.xsh -> Xenctrl.domid  -> Xenops_interface.Vgpu.t -> int -> Profile.t  -> unit
   val suspend_varstored: Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> Xenctrl.domid -> string
   val restore_varstored: Xenops_task.task_handle -> xs:Xenstore.Xs.xsh -> efivars:string -> Xenctrl.domid -> unit
 

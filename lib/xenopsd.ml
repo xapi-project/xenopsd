@@ -31,6 +31,7 @@ let qemu_dm_ready_timeout = ref 300.
 let vgpu_ready_timeout = ref 30.
 let varstored_ready_timeout = ref 30.
 let use_upstream_qemu = ref false
+let pci_quarantine = ref true
 
 let watch_queue_length = ref 1000
 
@@ -66,6 +67,7 @@ let options = [
   "action-after-qemu-crash", Arg.String (fun x -> action_after_qemu_crash := if x="" then None else Some x), (fun () -> match !action_after_qemu_crash with None->"" | Some x->x), "Action to take for VMs if QEMU crashes or dies unexpectedly: pause, poweroff. Otherwise, no action (default).";
   "feature-flags-path", Arg.Set_string feature_flags_path, (fun () -> !feature_flags_path), "Directory of experimental feature flags";
   "pvinpvh-xen-cmdline", Arg.Set_string pvinpvh_xen_cmdline, (fun () -> !pvinpvh_xen_cmdline), "Command line for the inner-xen for PV-in-PVH guests";
+  "pci-quarantine", Arg.Bool (fun b -> pci_quarantine := b), (fun () -> string_of_bool !pci_quarantine), "True if IOMMU contexts of PCI devices are needed to be placed in quarantine";
 ]
 
 let path () = Filename.concat !sockets_path "xenopsd"

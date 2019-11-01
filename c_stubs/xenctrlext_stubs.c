@@ -27,28 +27,44 @@
 #include <caml/fail.h>
 #include <caml/signals.h>
 #include <caml/callback.h>
+#include <caml/unixsupport.h>
 
 #define _H(__h) ((xc_interface *)(__h))
 #define _D(__d) ((uint32_t)Int_val(__d))
 
 /* From xenctrl_stubs */
 #define ERROR_STRLEN 1024
+
+static void raise_unix_errno_msg(int err_code, const char *err_msg)
+{
+        CAMLparam0();
+        value args[] = { unix_error_of_code(err_code), caml_copy_string(err_msg) };
+
+        caml_raise_with_args(*caml_named_value("Xenctrlext.Unix_error"),
+                             sizeof(args)/sizeof(args[0]), args);
+        CAMLnoreturn;
+}
+
 static void failwith_xc(xc_interface *xch)
 {
         static char error_str[ERROR_STRLEN];
+        int real_errno = -1;
         if (xch) {
                 const xc_error *error = xc_get_last_error(xch);
-                if (error->code == XC_ERROR_NONE)
+                if (error->code == XC_ERROR_NONE) {
+                        real_errno = errno;
                         snprintf(error_str, ERROR_STRLEN, "%d: %s", errno, strerror(errno));
-                else
+                } else {
+                        real_errno = error->code;
                         snprintf(error_str, ERROR_STRLEN, "%d: %s: %s",
                                  error->code,
                                  xc_error_code_to_desc(error->code),
                                  error->message);
+                }
         } else {
                 snprintf(error_str, ERROR_STRLEN, "Unable to open XC interface");
         }
-        caml_raise_with_string(*caml_named_value("xc.error"), error_str);
+        raise_unix_errno_msg(real_errno, error_str);
 }
 
 CAMLprim value stub_xenctrlext_get_runstate_info(value xch, value domid)
@@ -195,6 +211,34 @@ CAMLprim value stub_xenctrlext_domain_set_target(value xch,
 	CAMLreturn(Val_unit);
 }
 
+CAMLprim value stub_xenctrlext_assign_device(value xch, value domid,
+        value machine_sbdf, value flag)
+{
+    CAMLparam4(xch, domid, machine_sbdf, flag);
+    caml_enter_blocking_section();
+    int retval = xc_assign_device(_H(xch), _D(domid), Int_val(machine_sbdf), Int_val(flag));
+    caml_leave_blocking_section();
+    if (retval)
+        failwith_xc(_H(xch));
+    CAMLreturn(Val_unit);
+}
+
+CAMLprim value stub_xenctrlext_deassign_device(value xch, value domid, value machine_sbdf)
+{
+    CAMLparam3(xch, domid, machine_sbdf);
+    caml_enter_blocking_section();
+    int retval = xc_deassign_device(_H(xch), _D(domid), Int_val(machine_sbdf));
+    caml_leave_blocking_section();
+    if (retval)
+        failwith_xc(_H(xch));
+    CAMLreturn(Val_unit);
+}
+
+CAMLprim value stub_xenctrlext_domid_quarantine(value unit)
+{
+    CAMLparam1(unit);
+    CAMLreturn(Val_int(DOMID_IO));
+}
 
 /*
 * Local variables:
