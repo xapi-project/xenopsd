@@ -964,10 +964,35 @@ let read_pcidir ~xs domid =
 	(* Sort into the order the devices were plugged *)
 	List.sort (fun a b -> compare (fst a) (fst b)) pairs
 
-let add ~xs pcidevs domid =
+let encode_bdf pci =
+	(pci.Xenops_interface.Pci.domain lsl 16)
+	lor ((pci.Xenops_interface.Pci.bus land 0xff) lsl 8)
+	lor ((pci.Xenops_interface.Pci.dev land 0x1f) lsl 3)
+	lor (pci.Xenops_interface.Pci.fn land 0x7)
+
+let _quarantine xc pci quarantine =
+	let pci_bdf = encode_bdf pci in
+	let domid = Xenctrlext.domid_quarantine () in
+	try
+		match quarantine with
+		| true -> Xenctrlext.assign_device xc domid pci_bdf 0; true
+		| false -> Xenctrlext.deassign_device xc domid pci_bdf; true
+	with
+	| Xenctrlext.Unix_error (Unix.ESRCH, _) -> false
+	| Xenctrlext.Unix_error (Unix.ENODEV, _) -> false
+	| e -> raise e
+
+let quarantine xc pci =
+	_quarantine xc pci true
+
+let dequarantine xc pci =
+	_quarantine xc pci false
+
+let add ~xc ~xs pcidevs domid =
 	try
 		let current = read_pcidir ~xs domid in
 		let next_idx = List.fold_left max (-1) (List.map fst current) + 1 in
+		if !Xenopsd.pci_quarantine then List.iter (fun x -> ignore(quarantine xc x)) pcidevs;
 		add_xl pcidevs domid;
 		List.iteri
 			(fun count address ->
@@ -1674,7 +1699,7 @@ let init_daemon ~task ~path ~args ~name ~domid ~xs ~ready_path ?ready_val ~timeo
 	debug "Daemon initialised: %s" syslog_key;
 	pid
 
-let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready_timeout) l info domid =
+let __start (task: Xenops_task.t) ~xc ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready_timeout) l info domid =
 	debug "Device.Dm.start domid=%d args: [%s]" domid (String.concat " " l);
 
 	(* start vgpu emulation if appropriate *)
@@ -1685,6 +1710,7 @@ let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready
 		(* The below line does nothing if the device is already bound to the
 		 * nvidia driver. We rely on xapi to refrain from attempting to run
 		 * a vGPU on a device which is passed through to a guest. *)
+		if !Xenopsd.pci_quarantine then ignore(PCI.dequarantine xc vgpu.physical_pci_address);
 		PCI.bind [vgpu.physical_pci_address] PCI.Nvidia;
 		let args = vgpu_args_of_nvidia domid info.vcpus vgpu in
 		let ready_path = Printf.sprintf "/local/domain/%d/vgpu-pid" domid in
@@ -1694,8 +1720,10 @@ let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready
 		Forkhelpers.dontwaitpid vgpu_pid
 	end
 	| VNC (Vgpu [{implementation = GVT_g vgpu}], _, _, _, _)
-	| SDL (Vgpu [{implementation = GVT_g vgpu}], _) ->
+	| SDL (Vgpu [{implementation = GVT_g vgpu}], _) -> begin
+		if !Xenopsd.pci_quarantine then ignore(PCI.dequarantine xc vgpu.physical_pci_address);
 		PCI.bind [vgpu.physical_pci_address] PCI.I915
+	end
 	| VNC (Vgpu _, _, _, _, _)
 	| SDL (Vgpu _, _) -> failwith "Unsupported vGPU configuration"
 	| _ -> ()
@@ -1712,16 +1740,16 @@ let __start (task: Xenops_task.t) ~xs ~dmpath ?(timeout = !Xenopsd.qemu_dm_ready
 	(* At this point we expect qemu to outlive us; we will never call waitpid *)
 	Forkhelpers.dontwaitpid qemu_pid
 
-let start (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
+let start (task: Xenops_task.t) ~xc ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info false domid in
-	__start task ~xs ~dmpath ?timeout l info domid
-let restore (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
+	__start task ~xc ~xs ~dmpath ?timeout l info domid
+let restore (task: Xenops_task.t) ~xc ~xs ~dmpath ?timeout info domid =
 	let l = cmdline_of_info info true domid in
-	__start task ~xs ~dmpath ?timeout l info domid
+	__start task ~xc ~xs ~dmpath ?timeout l info domid
 
-let start_vnconly (task: Xenops_task.t) ~xs ~dmpath ?timeout info domid =
+let start_vnconly (task: Xenops_task.t) ~xc ~xs ~dmpath ?timeout info domid =
 	let l = vnconly_cmdline ~info domid in
-	__start task ~xs ~dmpath ?timeout l info domid
+	__start task ~xc ~xs ~dmpath ?timeout l info domid
 
 (* suspend/resume is a done by sending signals to qemu *)
 let suspend (task: Xenops_task.t) ~xs ~qemu_domid domid =

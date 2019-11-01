@@ -1342,11 +1342,11 @@ module VM = struct
 							) (get_stubdom ~xs di.Xenctrl.domid);
 					| Vm.HVM { Vm.qemu_stubdom = false } ->
 						(if saved_state then Device.Dm.restore else Device.Dm.start)
-							task ~xs ~dmpath:qemu_dm info di.Xenctrl.domid
+							task ~xc ~xs ~dmpath:qemu_dm info di.Xenctrl.domid
 					| Vm.PV _ ->
 						Device.Vfb.add ~xc ~xs di.Xenctrl.domid;
 						Device.Vkbd.add ~xc ~xs di.Xenctrl.domid;
-						Device.Dm.start_vnconly task ~xs ~dmpath:qemu_dm info di.Xenctrl.domid
+						Device.Dm.start_vnconly task ~xc ~xs ~dmpath:qemu_dm info di.Xenctrl.domid
 			) (create_device_model_config vm vmextra vbds vifs vgpus);
 			match vm.Vm.ty with
 				| Vm.PV { vncterm = true; vncterm_ip = ip } -> Device.PV_Vnc.start ~xs ?ip di.Xenctrl.domid
@@ -1903,7 +1903,7 @@ module PCI = struct
 				end;
 
 				Device.PCI.bind [ pci.address ] Device.PCI.Pciback;
-				Device.PCI.add xs [ pci.address ] frontend_domid
+				Device.PCI.add xc xs [ pci.address ] frontend_domid
 			) Newest vm
 
 	let unplug task vm pci =
