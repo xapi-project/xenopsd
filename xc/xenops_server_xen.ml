@@ -1593,8 +1593,7 @@ module VM = struct
               ) (get_stubdom ~xs di.Xenctrl.domid);
           | Vm.HVM { Vm.qemu_stubdom = false } ->
             (if saved_state then Device.Dm.restore else Device.Dm.start)
-              task ~xc ~xs ~dm:qemu_dm info di.Xenctrl.domid;
-            Device.Serial.update_xenstore ~xs di.Xenctrl.domid
+              task ~xc ~xs ~dm:qemu_dm info di.Xenctrl.domid
           | Vm.PV _ ->
             Device.Vfb.add ~xc ~xs di.Xenctrl.domid;
             Device.Vkbd.add ~xc ~xs di.Xenctrl.domid;
