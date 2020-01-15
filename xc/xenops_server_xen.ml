@@ -1514,7 +1514,8 @@ module VM = struct
     } in
     debug "static_max_mib=%Ld" static_max_mib;
     let pvinpvh_xen_cmdline =
-      let base =
+      let base = "pv-shim no-smep no-smap" in
+      let opt =
         try List.assoc "pvinpvh-xen-cmdline" vm.Vm.platformdata
         with Not_found -> !Xenopsd.pvinpvh_xen_cmdline
       in
@@ -1529,7 +1530,7 @@ module VM = struct
         in
         Printf.sprintf "shim_mem=%LdM" shim_mib
       in
-      String.concat " " [base; shim_mem]
+      String.concat " " [base; opt; shim_mem]
     in
     (* We should prevent leaking files in our filesystem *)
     let kernel_to_cleanup = ref None in
