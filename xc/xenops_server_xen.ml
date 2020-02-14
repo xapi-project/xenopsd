@@ -253,7 +253,7 @@ let device_kind_of_backend_keys backend_keys =
   try Device_common.vbd_kind_of_string (List.assoc "backend-kind" backend_keys)
   with Not_found -> Device_common.Vbd !Xenopsd.default_vbd_backend_kind
 
-let params_of_backend backend =
+let params_of_backend ?(prefer_nbd=false) backend =
   let xendisks, blockdevs, files, nbds = Storage_interface.implementations_of_backend backend in
   let xenstore_data = match xendisks with
     | xendisk::_ ->
@@ -263,9 +263,11 @@ let params_of_backend backend =
     | [] ->
       raise (Xenopsd_error (Internal_error ("Could not find XenDisk implementation: " ^ (Storage_interface.(rpc_of backend) backend |> Jsonrpc.to_string))))
   in
-  let params, extra_keys = match blockdevs, files, nbds, xendisks with
-  | {path}::_, _, _, _ | _, {path}::_, _, _ -> (path, [])
-  | _, _, {uri}::_, xendisk::_ -> (uri, ["qemu-params", xendisk.Storage_interface.params])
+  let params, extra_keys = match prefer_nbd, blockdevs, files, nbds, xendisks with
+  | true,_, _, {uri}::_, xendisk::_ -> (uri, ["qemu-params", xendisk.Storage_interface.params])
+  | true,{path}::_, _, _, _ | true,_, {path}::_, _, _ -> (path, [])
+  | false,{path}::_, _, _, _ | false,_, {path}::_, _, _ -> (path, [])
+  | false,_, _, {uri}::_, xendisk::_ -> (uri, ["qemu-params", xendisk.Storage_interface.params])
   | _ ->
     raise (Xenopsd_error (Internal_error ("Could not find BlockDevice, File, or Nbd implementation: " ^ (Storage_interface.(rpc_of backend) backend |> Jsonrpc.to_string))))
   in
@@ -282,12 +284,12 @@ let create_vbd_frontend ~xc ~xs task frontend_domid vdi =
       (* There's no need to use a PV disk if we're in the same domain *)
       let _xendisks, blockdevs, files, nbds = Storage_interface.implementations_of_backend vdi.attach_info in
       match files, blockdevs, nbds with
-      | {path}::_, _, _ | _, {path}::_, _ -> Name path
       | _, _, nbd::_ -> Nbd nbd
+      | {path}::_, _, _ | _, {path}::_, _ -> Name path
       | [], [], [] -> raise (Xenopsd_error (Internal_error ("Could not find File, BlockDevice, or Nbd implementation: " ^ (Storage_interface.(rpc_of backend) vdi.attach_info |> Jsonrpc.to_string))))
     end
   | Some backend_domid ->
-    let params, xenstore_data, extra_keys = params_of_backend vdi.attach_info in
+    let params, xenstore_data, extra_keys = params_of_backend ~prefer_nbd:true vdi.attach_info in
     let kind = device_kind_of_backend_keys xenstore_data in
     let t = {
       Device.Vbd.mode = Device.Vbd.ReadWrite;
