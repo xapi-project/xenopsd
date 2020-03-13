@@ -37,6 +37,8 @@ module HOST = struct
       features_oldstyle = [| |];
       features_pv_host = [| |];
       features_hvm_host = [| |];
+      policy_hvm = "";
+      policy_pv = "";
     };
     hypervisor = {
       Host.version = "";
@@ -52,6 +54,13 @@ module HOST = struct
   let send_debug_keys _ = ()
   let update_guest_agent_features _ = ()
   let upgrade_cpu_features _ _ = [||]
+  let upgrade_cpu_policy _ _ = ""
+  let policy_calc_compatible _ _ = ("", false, None)
+  let policy_is_compatible _ _ = false
+  let xc_cpu_policy_get_system _ = [||]
+  let serialise_policy _ = ""
+  let deserialise_policy _ = [| |]
+  let i2b _ = ""
 end
 module VM = struct
   let add _ = ()

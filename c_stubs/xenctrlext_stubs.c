@@ -435,6 +435,42 @@ CAMLprim value stub_xenctrlext_get_msr_arch_caps(value xch) {
 	CAMLreturn(caml_copy_int64(val));
 }
 
+CAMLprim value stub_xc_cpu_policy_get_system(value xch, value idx, value arr)
+{
+    CAMLparam3(xch, idx, arr);
+    int retval = xc_cpu_policy_get_system(_H(xch), Int_val(idx), &arr);
+    if (retval)
+        failwith_xc(_H(xch));
+    CAMLreturn(Val_int(arr));
+}
+
+CAMLprim value stub_cpu_policy_calc_compatible(value xch, value left, value right)
+{
+    CAMLparam3(xch, left, right);
+    int retval = xc_cpu_policy_calc_compatible(_H(xch), &left &right);
+    if (retval)
+        failwith_xc(_H(xch));
+    CAMLreturn(Val_int(left));
+}
+
+CAMLprim value stub_cpu_policy_is_compatible(value xch, value left, value right)
+{
+    CAMLparam3(xch, left, right);
+    int retval = xc_cpu_policy_is_compatible(_H(xch), &left &right);
+    if (retval)
+        failwith_xc(_H(xch));
+    CAMLreturn(Val_int(left));
+}
+
+CAMLprim value stub_upgrade_cpu_policy(value xch, value policy)
+{
+    CAMLparam2(xch, policy);
+    int retval = xc_upgrade_cpu_policy(_H(xch), policy);
+    if (retval)
+        failwith_xc(_H(xch));
+    CAMLreturn(Val_int(policy));
+}
+
 /*
 * Local variables:
 * indent-tabs-mode: t

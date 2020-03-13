@@ -2442,6 +2442,38 @@ module HOST = struct
          let module B = (val get_backend () : S) in
          B.HOST.upgrade_cpu_features features is_hvm
       ) ()
+
+  let upgrade_cpu_policy _ dbg policy is_hvm =
+    Debug.with_thread_associated dbg
+      (fun () ->
+         debug "HOST.upgrade_cpu_policy";
+         let module B = (val get_backend () : S) in
+         B.HOST.upgrade_cpu_policy policy is_hvm
+      ) ()
+
+  let policy_calc_compatible _ dbg left right =
+    Debug.with_thread_associated dbg
+      (fun () ->
+         debug "HOST.policy_calc_compatible";
+         let module B = (val get_backend () : S) in
+         B.HOST.policy_calc_compatible left right
+      ) ()
+
+  let policy_is_compatible _ dbg left right =
+    Debug.with_thread_associated dbg
+      (fun () ->
+          debug "HOST.policy_is_compatible";
+          let module B = (val get_backend () : S) in
+          B.HOST.policy_is_compatible left right
+      ) ()
+
+  let xc_cpu_policy_get_system _ dbg id =
+    Debug.with_thread_associated dbg
+      (fun () ->
+        debug "Host.xc_cpu_policy_get_system";
+        let module B = (val get_backend () : S) in
+        B.HOST.xc_cpu_policy_get_system id
+      ) ()
 end
 
 module VM = struct
@@ -2658,6 +2690,7 @@ module VM = struct
          then debug "Overwriting VM metadata for VM: %s" id;
          let platformdata = md.Metadata.vm.Vm.platformdata in
          debug "Platformdata:featureset=%s" (try List.assoc "featureset" platformdata with Not_found -> "(absent)");
+         debug "Platformdata:policy=%s" (try List.assoc "policy" platformdata with Not_found -> "(absent)");
          let platformdata =
            (* If platformdata does not contain a featureset, then we are importing
               					 * a VM that comes from a levelling-v1 host. In this case, give it a featureset
@@ -2680,8 +2713,19 @@ module VM = struct
            else
              platformdata
          in
+         let platformdata =
+           if not (List.mem_assoc "policy" platformdata) then
+             let p =
+             let stat = B.HOST.stat () in
+             (match md.Metadata.vm.Vm.ty with
+                 | HVM _ | PVinPVH _ -> Host.(stat.cpu_info.policy_hvm)
+                 | PV _ -> Host.(stat.cpu_info.policy_pv)) in
+             debug "Setting platformdata:policy=%s" p;
+             ("policy", p) :: platformdata
+           else
+             platformdata
+         in
          let vm = add' {md.Metadata.vm with platformdata} in
-
          let vbds = List.map
              (fun x ->
                 (* If receiving an HVM migration from XS 6.2 or earlier, the hd*
@@ -2900,6 +2944,10 @@ let _ =
   Server.HOST.set_worker_pool_size (HOST.set_worker_pool_size ());
   Server.HOST.update_guest_agent_features (HOST.update_guest_agent_features ());
   Server.HOST.upgrade_cpu_features (HOST.upgrade_cpu_features ());
+  Server.HOST.upgrade_cpu_policy (HOST.upgrade_cpu_policy ());
+  Server.HOST.policy_calc_compatible (HOST.policy_calc_compatible ());
+  Server.HOST.policy_is_compatible (HOST.policy_is_compatible ());
+  Server.HOST.xc_cpu_policy_get_system (HOST.xc_cpu_policy_get_system ());
   Server.VM.add (VM.add ());
   Server.VM.remove (VM.remove ());
   Server.VM.migrate (VM.migrate ());
