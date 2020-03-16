@@ -708,28 +708,6 @@ let deserialise policy =
 module HOST = struct
   include Xenops_server_skeleton.HOST
 
-  let i2b i =
-    match Base64.encode (Int64.to_string i) with
-      Ok x -> x
-    | _ -> failwith ("Failed to Base64 Encode: " ^ Int64.to_string i)
-
-  let serialise_policy policy =
-    Array.fold_left (fun s acc ->
-        match s with
-          "" -> acc
-        | _ -> match acc with
-            "" -> s
-          | _ -> s ^ "," ^ acc
-      ) "" (Array.map i2b policy)
-
-  let deserialise_policy policy =
-    let decode e = match Base64.decode e with
-        Ok policy -> Int64.of_string policy
-      | _ -> failwith ("Failed to Base64 Decode: " ^ e)
-    in
-    List.map decode (String.split_on_char ',' policy)
-    |> Array.of_list
-
   let stat () =
     (* The boot-time CPU info is copied into a file in @ETCDIR@/ in the xenservices init script;
        we use that to generate CPU records from. This ensures that if xapi is started after someone has
