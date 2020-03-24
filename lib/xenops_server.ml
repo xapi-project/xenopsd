@@ -2715,11 +2715,11 @@ module VM = struct
          in
          let platformdata =
            if not (List.mem_assoc "policy" platformdata) then
-             let p =
              let stat = B.HOST.stat () in
-             (match md.Metadata.vm.Vm.ty with
-                 | HVM _ | PVinPVH _ -> Host.(stat.cpu_info.policy_hvm)
-                 | PV _ -> Host.(stat.cpu_info.policy_pv)) in
+             let p =
+                (match md.Metadata.vm.Vm.ty with
+                | HVM _ | PVinPVH _ -> Host.(stat.cpu_info.policy_hvm)
+                | PV _ -> Host.(stat.cpu_info.policy_pv)) in
              debug "Setting platformdata:policy=%s" p;
              ("policy", p) :: platformdata
            else

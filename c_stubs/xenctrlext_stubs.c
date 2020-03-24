@@ -435,6 +435,43 @@ CAMLprim value stub_xenctrlext_get_msr_arch_caps(value xch) {
 	CAMLreturn(caml_copy_int64(val));
 }
 
+static char* serialise(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs)
+{
+	uint32_t max_leaves = 0;
+	uint32_t max_msrs = 0;
+
+	if (xc_get_cpu_policy_size(_H(xch), &max_leaves, &max_msrs))
+		failwith_xc(_H(xch));
+
+    char** serialised_leaves = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
+    char** serialised_msrs = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
+
+    char* s = calloc(1, sizeof(xen_cpuid_leaf_t));
+    char* sm = calloc(1, sizeof(xen_msr_entry_t));
+    for (int i = 0; i < max_leaves; i++)
+    {
+        xen_cpuid_leaf_t *l = &leaves[i];
+	    if (sizeof(l) != sizeof(6 * 4))
+            raise_unix_errno_msg(-1, "Struct was not the  expected size");
+        sprintf(s, "%d %d %d %d %d %d", l->leaf, l->subleaf, l->a, l->b, l->c, l->d);
+        serialised_msrs[i]  = s;
+    }
+    for (int i = 0; i < max_msrs; i++)
+    {
+        xen_msr_entry_t *l = &msrs[i];
+	    if (sizeof(l) != sizeof(xen_msr_entry_t))
+            raise_unix_errno_msg(-1, "Struct was not the  expected size");
+        sprintf(sm, "%d %d %lu", l->idx, l->flags, l->val);
+        serialised_msrs[i] = sm;
+    }
+
+    char* ret = strcat(s, sm);
+    free(s);
+    free(sm);
+    return ret;
+}
+
+/*
 CAMLprim value stub_xc_cpu_policy_get_system(value xch, value idx, value arr)
 {
     CAMLparam3(xch, idx, arr);
@@ -447,7 +484,7 @@ CAMLprim value stub_xc_cpu_policy_get_system(value xch, value idx, value arr)
 CAMLprim value stub_cpu_policy_calc_compatible(value xch, value left, value right)
 {
     CAMLparam3(xch, left, right);
-    int retval = xc_cpu_policy_calc_compatible(_H(xch), &left &right);
+    int retval = xc_cpu_policy_calc_compatible(_H(xch), &left, &right);
     if (retval)
         failwith_xc(_H(xch));
     CAMLreturn(Val_int(left));
@@ -456,10 +493,8 @@ CAMLprim value stub_cpu_policy_calc_compatible(value xch, value left, value righ
 CAMLprim value stub_cpu_policy_is_compatible(value xch, value left, value right)
 {
     CAMLparam3(xch, left, right);
-    int retval = xc_cpu_policy_is_compatible(_H(xch), &left &right);
-    if (retval)
-        failwith_xc(_H(xch));
-    CAMLreturn(Val_int(left));
+    int retval = xc_cpu_policy_is_compatible(_H(xch), &left, &right);
+    CAMLreturn(Val_int(retval));
 }
 
 CAMLprim value stub_upgrade_cpu_policy(value xch, value policy)
@@ -470,7 +505,7 @@ CAMLprim value stub_upgrade_cpu_policy(value xch, value policy)
         failwith_xc(_H(xch));
     CAMLreturn(Val_int(policy));
 }
-
+*/
 /*
 * Local variables:
 * indent-tabs-mode: t
