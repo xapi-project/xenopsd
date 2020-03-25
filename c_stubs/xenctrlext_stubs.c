@@ -35,6 +35,7 @@
 /* From xenctrl_stubs */
 #define ERROR_STRLEN 1024
 
+#define POLICY_DELIMITER ","
 static void raise_unix_errno_msg(int err_code, const char *err_msg)
 {
         CAMLparam0();
@@ -386,6 +387,11 @@ DEFINE_XEN_GUEST_HANDLE(xen_msr_entry_t);
 #define XEN_SYSCTL_cpu_policy_host 1
 #endif
 
+typedef struct serialised_policy {
+    char* leaves;
+    char* msrs;
+} serialised_policy_t;
+
 __attribute__((weak))
 int xc_get_cpu_policy_size(xc_interface *xch, uint32_t *nr_leaves,
 			   uint32_t *nr_msrs);
@@ -435,7 +441,7 @@ CAMLprim value stub_xenctrlext_get_msr_arch_caps(value xch) {
 	CAMLreturn(caml_copy_int64(val));
 }
 
-static char* serialise(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs)
+static serialised_policy_t scpy(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs)
 {
 	uint32_t max_leaves = 0;
 	uint32_t max_msrs = 0;
@@ -446,30 +452,30 @@ static char* serialise(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msr
     char** serialised_leaves = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
     char** serialised_msrs = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
 
-    char* s = calloc(1, sizeof(xen_cpuid_leaf_t));
-    char* sm = calloc(1, sizeof(xen_msr_entry_t));
-    for (int i = 0; i < max_leaves; i++)
-    {
-        xen_cpuid_leaf_t *l = &leaves[i];
-	    if (sizeof(l) != sizeof(6 * 4))
-            raise_unix_errno_msg(-1, "Struct was not the  expected size");
-        sprintf(s, "%d %d %d %d %d %d", l->leaf, l->subleaf, l->a, l->b, l->c, l->d);
-        serialised_msrs[i]  = s;
-    }
-    for (int i = 0; i < max_msrs; i++)
-    {
-        xen_msr_entry_t *l = &msrs[i];
-	    if (sizeof(l) != sizeof(xen_msr_entry_t))
-            raise_unix_errno_msg(-1, "Struct was not the  expected size");
-        sprintf(sm, "%d %d %lu", l->idx, l->flags, l->val);
-        serialised_msrs[i] = sm;
-    }
+    serialised_policy_t serial;
+    serial.leaves = calloc(1, sizeof(xen_cpuid_leaf_t));
+    serial.msrs = calloc(1, sizeof(xen_msr_entry_t));
 
-    char* ret = strcat(s, sm);
-    free(s);
-    free(sm);
-    return ret;
+    memcpy(serial.leaves, leaves, max_leaves);
+    memcpy(serial.msrs, msrs, max_msrs);
+
+    return serial;
 }
+
+static int dscpy(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs, serialised_policy_t serial)
+{
+	uint32_t max_leaves = 0;
+	uint32_t max_msrs = 0;
+
+	if (xc_get_cpu_policy_size(_H(xch), &max_leaves, &max_msrs))
+		failwith_xc(_H(xch));
+
+    memcpy(leaves, serial.leaves, max_leaves);
+    memcpy(msrs, serial.msrs, max_msrs);
+
+    return 0;
+}
+
 
 /*
 CAMLprim value stub_xc_cpu_policy_get_system(value xch, value idx, value arr)
