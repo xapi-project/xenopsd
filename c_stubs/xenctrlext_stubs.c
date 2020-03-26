@@ -441,41 +441,45 @@ CAMLprim value stub_xenctrlext_get_msr_arch_caps(value xch) {
 	CAMLreturn(caml_copy_int64(val));
 }
 
-static serialised_policy_t scpy(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs)
+CAMLprim value serialise_policy(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs)
 {
-	uint32_t max_leaves = 0;
-	uint32_t max_msrs = 0;
+    CAMLparam1(xch);
+	CAMLlocal1(policy);
+        uint32_t max_leaves = 0;
+        uint32_t max_msrs = 0;
 
-	if (xc_get_cpu_policy_size(_H(xch), &max_leaves, &max_msrs))
-		failwith_xc(_H(xch));
 
-    char** serialised_leaves = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
-    char** serialised_msrs = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
+        if (xc_get_cpu_policy_size(_H(xch), &max_leaves, &max_msrs))
+            failwith_xc(_H(xch));
 
-    serialised_policy_t serial;
-    serial.leaves = calloc(1, sizeof(xen_cpuid_leaf_t));
-    serial.msrs = calloc(1, sizeof(xen_msr_entry_t));
+        char** serialised_leaves = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
+        char** serialised_msrs = calloc(max_leaves, sizeof(xen_cpuid_leaf_t));
 
-    memcpy(serial.leaves, leaves, max_leaves);
-    memcpy(serial.msrs, msrs, max_msrs);
+        serialised_policy_t serial;
+        serial.leaves = calloc(1, sizeof(xen_cpuid_leaf_t));
+        serial.msrs = calloc(1, sizeof(xen_msr_entry_t));
 
-    return serial;
+        memcpy(serial.leaves, leaves, max_leaves);
+        memcpy(serial.msrs, msrs, max_msrs);
+        policy = caml_alloc_tuple(2);
+        Store_field(policy, 0, caml_copy_string(serial.leaves));
+        Store_field(policy, 1,  caml_copy_string(serial.msrs));
+    CAMLreturn(policy);
 }
 
-static int dscpy(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs, serialised_policy_t serial)
+CAMLprim value deserialise_policy(value xch, xen_cpuid_leaf_t* leaves, xen_msr_entry_t* msrs, serialised_policy_t serial)
 {
-	uint32_t max_leaves = 0;
-	uint32_t max_msrs = 0;
+    uint32_t max_leaves = 0;
+    uint32_t max_msrs = 0;
 
-	if (xc_get_cpu_policy_size(_H(xch), &max_leaves, &max_msrs))
-		failwith_xc(_H(xch));
+    if (xc_get_cpu_policy_size(_H(xch), &max_leaves, &max_msrs))
+        failwith_xc(_H(xch));
 
     memcpy(leaves, serial.leaves, max_leaves);
     memcpy(msrs, serial.msrs, max_msrs);
 
     return 0;
 }
-
 
 /*
 CAMLprim value stub_xc_cpu_policy_get_system(value xch, value idx, value arr)
