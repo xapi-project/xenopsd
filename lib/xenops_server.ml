@@ -2331,13 +2331,16 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
           Handshake.send s Handshake.Success ;
           debug "VM.receive_memory: Synchronisation point 4"
         with e ->
-          Backtrace.is_important e ;
-          Debug.log_backtrace e (Backtrace.get e) ;
-          debug "Caught %s: cleaning up VM state" (Printexc.to_string e) ;
-          perform_atomics
-            (atomics_of_operation (VM_shutdown (id, None)) @ [VM_remove id])
-            t ;
-          Handshake.send s (Handshake.Error (Printexc.to_string e))
+          finally
+            (fun () ->
+              Backtrace.is_important e ;
+              Debug.log_backtrace e (Backtrace.get e) ;
+              debug "Caught %s: cleaning up VM state" (Printexc.to_string e) ;
+              perform_atomics
+                (atomics_of_operation (VM_shutdown (id, None)) @ [VM_remove id])
+                t)
+            (fun () ->
+              Handshake.send s (Handshake.Error (Printexc.to_string e)))
       )
     | VM_check_state id ->
         let vm = VM_DB.read_exn id in
