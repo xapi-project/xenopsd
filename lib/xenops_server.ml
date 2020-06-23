@@ -2153,8 +2153,20 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
             let final_handshake () =
               Handshake.send ~verbose:true mem_fd Handshake.Success ;
               debug "VM.migrate: Synchronisation point 3" ;
-              Handshake.recv_success mem_fd ;
-              debug "VM.migrate: Synchronisation point 4"
+              match Handshake.recv mem_fd with
+              | Success ->
+                  debug "VM.migrate: Synchronisation point 4"
+              | Error msg ->
+                  error
+                    "VM.migrate: Failed during Synchronisation point 4. msg: %s"
+                    msg ;
+                  ( try
+                      B.VM.remove vm ;
+                      info "VM.migrate: successfully removed VM runtime state"
+                    with e ->
+                      error "VM.migrate: failed to remove VM runtime state"
+                  ) ;
+                  raise (Xenopsd_error (Internal_error msg))
             in
             let save ?vgpu_fd () =
               perform_atomics
