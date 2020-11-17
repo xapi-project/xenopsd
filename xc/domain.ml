@@ -355,7 +355,13 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid no_sharept =
   in
   debug "Domain_config: [%s]"
     (rpc_of arch_domainconfig domain_config |> Jsonrpc.to_string) ;
-  let domid = Xenctrl.domain_create xc config in
+  let domid =
+    if List.mem_assoc "domid" vm_info.platformdata then
+      int_of_string (List.assoc "domid" vm_info.platformdata)
+    else
+      0
+  in
+  let domid = Xenctrlext.domain_create_domid xc config domid in
   let name =
     if vm_info.name <> "" then vm_info.name else sprintf "Domain-%d" domid
   in
