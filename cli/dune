@@ -30,9 +30,8 @@
 )
 
 (rule
- (targets xenops-cli.1.gz)
- (action
-  (run gzip %{dep:xenops-cli.1}))
+ (with-stdout-to xenops-cli.1.gz
+  (run gzip -c %{dep:xenops-cli.1}))
 )
 
 (install
