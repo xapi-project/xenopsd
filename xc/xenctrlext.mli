@@ -81,3 +81,6 @@ external cputopoinfo : handle -> cputopo array = "stub_xenctrlext_cputopoinfo"
 
 external xc_get_msr_arch_caps : handle -> int64
   = "stub_xenctrlext_get_msr_arch_caps"
+
+external domain_create_domid : handle -> domctl_create_config -> domid -> domid
+  = "stub_xc_domain_create_domid"

@@ -460,6 +460,130 @@ CAMLprim value stub_xenctrlext_get_msr_arch_caps(value xch) {
 	CAMLreturn(caml_copy_int64(val));
 }
 
+#define Val_none (Val_int(0))
+static unsigned int ocaml_list_to_c_bitmap(value l)
+             /* ! */
+             /*
+	      * All calls to this function must be in a form suitable
+	      * for xenctrl_abi_check.  The parsing there is ad-hoc.
+	      */
+{
+	unsigned int val = 0;
+
+	for ( ; l != Val_none; l = Field(l, 1) )
+		val |= 1u << Int_val(Field(l, 0));
+
+	return val;
+}
+static void domain_handle_of_uuid_string(xen_domain_handle_t h,
+					 const char *uuid)
+{
+# define SCNx8       "hhx"
+#define X "%02"SCNx8
+#define UUID_FMT (X X X X "-" X X "-" X X "-" X X "-" X X X X X X)
+
+	if ( sscanf(uuid, UUID_FMT, &h[0], &h[1], &h[2], &h[3], &h[4],
+		    &h[5], &h[6], &h[7], &h[8], &h[9], &h[10], &h[11],
+		    &h[12], &h[13], &h[14], &h[15]) != 16 )
+	{
+		char buf[128];
+
+		snprintf(buf, sizeof(buf),
+			 "Xc.int_array_of_uuid_string: %s", uuid);
+
+		caml_invalid_argument(buf);
+	}
+
+#undef X
+}
+
+CAMLprim value stub_xc_domain_create_domid(value xch, value config, value want_domid)
+{
+	CAMLparam2(xch, config);
+	CAMLlocal2(l, arch_domconfig);
+
+	/* Mnemonics for the named fields inside domctl_create_config */
+#define VAL_SSIDREF             Field(config, 0)
+#define VAL_HANDLE              Field(config, 1)
+#define VAL_FLAGS               Field(config, 2)
+#define VAL_IOMMU_OPTS          Field(config, 3)
+#define VAL_MAX_VCPUS           Field(config, 4)
+#define VAL_MAX_EVTCHN_PORT     Field(config, 5)
+#define VAL_MAX_GRANT_FRAMES    Field(config, 6)
+#define VAL_MAX_MAPTRACK_FRAMES Field(config, 7)
+#define VAL_ARCH                Field(config, 8)
+
+	uint32_t domid = Int_val(want_domid);
+	int result;
+	struct xen_domctl_createdomain cfg = {
+		.ssidref = Int32_val(VAL_SSIDREF),
+		.max_vcpus = Int_val(VAL_MAX_VCPUS),
+		.max_evtchn_port = Int_val(VAL_MAX_EVTCHN_PORT),
+		.max_grant_frames = Int_val(VAL_MAX_GRANT_FRAMES),
+		.max_maptrack_frames = Int_val(VAL_MAX_MAPTRACK_FRAMES),
+	};
+
+	domain_handle_of_uuid_string(cfg.handle, String_val(VAL_HANDLE));
+
+	cfg.flags = ocaml_list_to_c_bitmap
+		/* ! domain_create_flag CDF_ lc */
+		/* ! XEN_DOMCTL_CDF_ XEN_DOMCTL_CDF_MAX max */
+		(VAL_FLAGS);
+
+	cfg.iommu_opts = ocaml_list_to_c_bitmap
+		/* ! domain_create_iommu_opts IOMMU_ lc */
+		/* ! XEN_DOMCTL_IOMMU_ XEN_DOMCTL_IOMMU_MAX max */
+		(VAL_IOMMU_OPTS);
+
+	arch_domconfig = Field(VAL_ARCH, 0);
+	switch ( Tag_val(VAL_ARCH) )
+	{
+	case 0: /* ARM - nothing to do */
+		caml_failwith("Unhandled: ARM");
+		break;
+
+	case 1: /* X86 - emulation flags in the block */
+#if defined(__i386__) || defined(__x86_64__)
+
+        /* Mnemonics for the named fields inside xen_x86_arch_domainconfig */
+#define VAL_EMUL_FLAGS          Field(arch_domconfig, 0)
+
+		cfg.arch.emulation_flags = ocaml_list_to_c_bitmap
+			/* ! x86_arch_emulation_flags X86_EMU_ none */
+			/* ! XEN_X86_EMU_ XEN_X86_EMU_ALL all */
+			(VAL_EMUL_FLAGS);
+
+#undef VAL_EMUL_FLAGS
+
+#else
+		caml_failwith("Unhandled: x86");
+#endif
+		break;
+
+	default:
+		caml_failwith("Unhandled domconfig type");
+	}
+
+#undef VAL_ARCH
+#undef VAL_MAX_MAPTRACK_FRAMES
+#undef VAL_MAX_GRANT_FRAMES
+#undef VAL_MAX_EVTCHN_PORT
+#undef VAL_MAX_VCPUS
+#undef VAL_IOMMU_OPTS
+#undef VAL_FLAGS
+#undef VAL_HANDLE
+#undef VAL_SSIDREF
+
+	caml_enter_blocking_section();
+	result = xc_domain_create(_H(xch), &domid, &cfg);
+	caml_leave_blocking_section();
+
+	if (result < 0)
+		failwith_xc(_H(xch));
+
+	CAMLreturn(Val_int(domid));
+}
+
 /*
 * Local variables:
 * indent-tabs-mode: t
