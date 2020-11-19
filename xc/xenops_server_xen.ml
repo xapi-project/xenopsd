@@ -1656,11 +1656,16 @@ module VM = struct
 							max memory_actual max_memory_bytes in
 
 						let rtc = try xs.Xs.read (Printf.sprintf "/vm/%s/rtc/timeoffset" (Uuidm.to_string uuid)) with Xs_protocol.Enoent _ -> "" in
-           let rec ls_lR root acc dir =
+           let ls_l root dir =
               let entry = root ^ "/" ^ dir in
-              let acc = try (dir, xs.Xs.read entry) :: acc with _ -> acc in
+              let value_opt = try Some (dir, xs.Xs.read entry) with _ -> None in
               let subdirs = try xs.Xs.directory entry |> List.filter (fun x -> x <> "") |> map_tr (fun x -> dir ^ "/" ^ x) with _ -> [] in
-              List.fold_left (ls_lR root) acc subdirs
+              (value_opt, subdirs)
+           in
+           let rec ls_lR root acc dir =
+             let value_opt, subdirs = ls_l root dir in
+             let acc = match value_opt with Some v -> v :: acc | None -> acc in
+             List.fold_left (ls_lR root) acc subdirs
            in
 						let guest_agent =
               [ "drivers"; "attr"; "data"; "control"; "feature" ]
