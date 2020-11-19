@@ -2047,8 +2047,9 @@ module VM = struct
 
            let rtc = try xs.Xs.read (Printf.sprintf "/vm/%s/rtc/timeoffset" (Uuidm.to_string uuid)) with Xs_protocol.Enoent _ -> "" in
            let rec ls_lR root dir =
-             let this = try [ dir, xs.Xs.read (root ^ "/" ^ dir) ] with _ -> [] in
-             let subdirs = try xs.Xs.directory (root ^ "/" ^ dir) |> List.filter (fun x -> x <> "") |> map_tr (fun x -> dir ^ "/" ^ x) with _ -> [] in
+             let entry = root ^ "/" ^ dir in
+             let this = try [(dir, xs.Xs.read entry)] with _ -> [] in
+             let subdirs = try xs.Xs.directory entry |> List.filter (fun x -> x <> "") |> map_tr (fun x -> dir ^ "/" ^ x) with _ -> [] in
              this @ (List.concat (map_tr (ls_lR root) subdirs)) in
            let guest_agent =
              [ "drivers"; "attr"; "data"; "control"; "feature"; "xenserver/attr" ]
