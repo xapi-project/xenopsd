@@ -53,7 +53,9 @@ let numa_placement = ref false
 let numa_placement_strict = ref false
 
 (* O(N^2) operations, until we get a xenstore cache, so use a small number here *)
-let vm_xenstore_ls_lR_quota = ref 128
+let vm_guest_agent_xenstore_quota = ref 128
+
+let vm_guest_agent_xenstore_quota_warn_interval = ref 3600
 
 let options = [
   "queue", Arg.Set_string Xenops_interface.queue_name, (fun () -> !Xenops_interface.queue_name), "Listen on a specific queue";
@@ -80,7 +82,8 @@ let options = [
   "numa-placement", Arg.Bool (fun x -> numa_placement := x), (fun () -> string_of_bool !numa_placement), "NUMA-aware placement of VMs";
   "numa-placement-strict", Arg.Bool (fun x -> numa_placement_strict := x), (fun () -> string_of_bool !numa_placement), "Fail if NUMA-aware placement is not possible";
   "pci-quarantine", Arg.Bool (fun b -> pci_quarantine := b), (fun () -> string_of_bool !pci_quarantine), "True if IOMMU contexts of PCI devices are needed to be placed in quarantine";
-  "vm-xenstore-ls-lR-quota", Arg.Set_int vm_xenstore_ls_lR_quota, (fun () -> string_of_int !vm_xenstore_ls_lR_quota), "Maximum entries in VM xenstore trees watched by xenopsd";
+  "vm-guest-agent-xenstore-quota", Arg.Set_int vm_guest_agent_xenstore_quota, (fun () -> string_of_int !vm_guest_agent_xenstore_quota), "Maximum entries in VM xenstore trees watched by xenopsd";
+  "vm-guest-agent-xenstore-quota-warn-interval", Arg.Set_int vm_guest_agent_xenstore_quota_warn_interval, (fun () -> string_of_int !vm_guest_agent_xenstore_quota_warn_interval), "How often to warn that a VM is still over its xenstore quota";
 ]
 
 let path () = Filename.concat !sockets_path "xenopsd"
