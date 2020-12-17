@@ -40,6 +40,11 @@ let ca_140252_workaround = ref false
 let additional_ballooning_timeout = ref 120.
 let pci_quarantine = ref true
 
+(* O(N^2) operations, until we get a xenstore cache, so use a small number here *)
+let vm_guest_agent_xenstore_quota = ref 128
+
+let vm_guest_agent_xenstore_quota_warn_interval = ref 3600
+
 let options = [
     "queue", Arg.Set_string Xenops_interface.queue_name, (fun () -> !Xenops_interface.queue_name), "Listen on a specific queue";
     "sockets-path", Arg.Set_string sockets_path, (fun () -> !sockets_path), "Directory to create listening sockets";
@@ -56,7 +61,9 @@ let options = [
     "default-vbd-backend-kind", Arg.Set_string default_vbd_backend_kind, (fun () -> !default_vbd_backend_kind), "Default backend for VBDs";
     "ca-140252-workaround", Arg.Bool (fun x -> ca_140252_workaround := x), (fun () -> string_of_bool !ca_140252_workaround), "Workaround for evtchn misalignment for legacy PV tools";
     "additional-ballooning-timeout", Arg.Set_float additional_ballooning_timeout, (fun () -> string_of_float !additional_ballooning_timeout), "Time we allow the guests to do additional memory ballooning before live migration";
-   "pci-quarantine", Arg.Bool (fun b -> pci_quarantine := b), (fun () -> string_of_bool !pci_quarantine), "True if IOMMU contexts of PCI devices are needed to be placed in quarantine";
+    "pci-quarantine", Arg.Bool (fun b -> pci_quarantine := b), (fun () -> string_of_bool !pci_quarantine), "True if IOMMU contexts of PCI devices are needed to be placed in quarantine";
+    "vm-guest-agent-xenstore-quota", Arg.Set_int vm_guest_agent_xenstore_quota, (fun () -> string_of_int !vm_guest_agent_xenstore_quota), "Maximum entries in VM xenstore trees watched by xenopsd";
+    "vm-guest-agent-xenstore-quota-warn-interval", Arg.Set_int vm_guest_agent_xenstore_quota_warn_interval, (fun () -> string_of_int !vm_guest_agent_xenstore_quota_warn_interval), "How often to warn that a VM is still over its xenstore quota";
 ]
 
 let path () = Filename.concat !sockets_path "xenopsd"
