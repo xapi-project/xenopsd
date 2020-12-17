@@ -91,3 +91,7 @@ val demu_restore_path: (int -> 'a, 'b, 'a) format
 
 (** Directory in xenstore where qemu writes its state *)
 val device_model_path: qemu_domid:int -> int -> string
+
+val xenops_domain_path : string
+
+val xenops_path_of_domain : Xenctrl.domid -> string
