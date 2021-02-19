@@ -2504,6 +2504,10 @@ module VM = struct
     on_domain (fun xc xs task vm di ->
         Domain.send_s3resume ~xc di.Xenctrl.domid)
 
+  let soft_reset =
+    on_domain (fun xc xs task vm di ->
+        Domain.soft_reset ~xc ~xs di.Xenctrl.domid)
+
   let get_state vm =
     let uuid = uuid_of_vm vm in
     let vme = vm.Vm.id |> DB.read in
@@ -2921,6 +2925,8 @@ module VM = struct
                     Needs_crashdump
                 | 4 ->
                     Needs_reboot
+                | 5 ->
+                    Needs_softreset
                 | _ ->
                     Needs_poweroff
                 ) (* unexpected *)
