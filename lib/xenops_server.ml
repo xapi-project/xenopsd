@@ -836,7 +836,7 @@ let rebooting id f =
 let is_rebooting id =
 	Mutex.execute rebooting_vms_m (fun () -> List.mem id !rebooting_vms)
 
-let export_metadata' vdi_map vif_map id =
+let export_metadata vdi_map vif_map id =
 	let module B = (val get_backend () : S) in
 
 	let vm_t = VM_DB.read_exn id in
@@ -874,11 +874,7 @@ let export_metadata' vdi_map vif_map id =
 		pcis = pcis;
 		vgpus = vgpus;
 		domains = Some domains;
-	}
-
-let export_metadata vdi_map vif_map id =
-	export_metadata' vdi_map vif_map id
-	|> Metadata.rpc_of_t |> Jsonrpc.to_string
+	} |> Metadata.rpc_of_t |> Jsonrpc.to_string
 
 let import_metadata id md =
 	let open Vm in
@@ -1694,18 +1690,8 @@ and perform ?subtask ?result (op: operation) (t: Xenops_task.t) : unit =
 			then debug "This is a localhost migration.";
 			Xenops_hooks.vm_pre_migrate ~reason:Xenops_hooks.reason__migrate_source ~id;
 
-			let id =
-				if is_localhost then
-					(* In case of a localhost migration, we already have the VM metadata, but
-					   we still export+import to remap VDIs and VIFs. These functions must
-					   now be called directly, because the VM.import_metadata API queues the
-					   operation and blocks (this is not the same on newer branches, where
-					   separate, temporary UUIDs are used for the source and target). *)
-					import_metadata id (export_metadata' vdi_map vif_map id)
-				else
-					let module Remote = Xenops_interface.Client(struct let rpc = Xcp_client.xml_http_rpc ~srcstr:"xenops" ~dststr:"dst_xenops" (fun () -> url') end) in
-					Remote.VM.import_metadata t.Xenops_task.dbg (export_metadata vdi_map vif_map id)
-			in
+			let module Remote = Xenops_interface.Client(struct let rpc = Xcp_client.xml_http_rpc ~srcstr:"xenops" ~dststr:"dst_xenops" (fun () -> url') end) in
+			let id = Remote.VM.import_metadata t.Xenops_task.dbg(export_metadata vdi_map vif_map id) in
 			debug "Received id = %s" id;
 			let memory_url = Uri.make ?scheme:(Uri.scheme url) ?host:(Uri.host url) ?port:(Uri.port url)
 				~path:(Uri.path url ^ "/memory/" ^ id) ~query:(Uri.query url) () in
