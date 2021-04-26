@@ -194,13 +194,6 @@ module VM_DB = struct
 				Updates.remove (Dynamic.Vm id) updates;
 				remove id
 			)
-
-	let add' x =
-		let open Vm in
-		debug "VM.add %s" (Jsonrpc.to_string (rpc_of_t x)) ;
-		write x.id x ;
-		let module B = (val get_backend () : S) in
-		B.VM.add x ; x.id
 end
 
 module PCI_DB = struct
@@ -236,26 +229,6 @@ module PCI_DB = struct
 				Updates.remove (Dynamic.Pci id) updates;
 				remove id
 			)
-
-	let add' x =
-		let open Pci in
-		debug "PCI.add %s %s" (string_of_id x.id) (Jsonrpc.to_string (rpc_of_t x)) ;
-		(* Only if the corresponding VM actually exists *)
-		let vm = vm_of x.id in
-		if not (VM_DB.exists vm) then (
-			debug "VM %s not managed by me" vm ;
-			raise (Does_not_exist ("VM", vm))
-		) ;
-		write x.id x ;
-		x.id
-
-	let remove' id =
-		debug "PCI.remove %s" (string_of_id id) ;
-		let module B = (val get_backend () : S) in
-		if (B.PCI.get_state (vm_of id) (read_exn id)).Pci.plugged then
-			raise Device_is_connected
-		else
-			remove id
 end
 
 module VBD_DB = struct
@@ -291,26 +264,6 @@ module VBD_DB = struct
 				Updates.remove (Dynamic.Vbd id) updates;
 				remove id
 			)
-
-	let add' x =
-		let open Vbd in
-		debug "VBD.add %s %s" (string_of_id x.Vbd.id) (Jsonrpc.to_string (rpc_of_t x)) ;
-		(* Only if the corresponding VM actually exists *)
-		let vm = vm_of x.id in
-		if not (VM_DB.exists vm) then (
-			debug "VM %s not managed by me" vm ;
-			raise (Does_not_exist ("VM", vm))
-		) ;
-		write x.id x ;
-		x.id
-
-	let remove' id =
-		debug "VBD.remove %s" (string_of_id id) ;
-		let module B = (val get_backend () : S) in
-		if (B.VBD.get_state (vm_of id) (read_exn id)).Vbd.plugged then
-			raise Device_is_connected
-		else
-			remove id
 end
 
 module VIF_DB = struct
@@ -344,36 +297,6 @@ module VIF_DB = struct
 				Updates.remove (Dynamic.Vif id) updates;
 				remove id
 			)
-
-	let add' x =
-		let open Vif in
-		debug "VIF.add %s" (Jsonrpc.to_string (rpc_of_t x)) ;
-		(* Only if the corresponding VM actually exists *)
-		let vm = vm_of x.id in
-		if not (VM_DB.exists vm) then (
-			debug "VM %s not managed by me" vm ;
-			raise (Does_not_exist ("VM", vm))
-		) ;
-		(* Generate MAC if necessary *)
-		let mac =
-			match x.mac with
-			| "random" ->
-					Mac.random_local_mac ()
-			| "" ->
-					Mac.hashchain_local_mac x.position (vm_of x.id)
-			| mac ->
-					mac
-		in
-		write x.id {x with mac} ;
-		x.id
-
-	let remove' id =
-		debug "VIF.remove %s" (string_of_id id) ;
-		let module B = (val get_backend () : S) in
-		if (B.VIF.get_state (vm_of id) (read_exn id)).Vif.plugged then
-			raise Device_is_connected
-		else
-			remove id
 end
 
 module VGPU_DB = struct
@@ -409,26 +332,6 @@ module VGPU_DB = struct
 				Updates.remove (Dynamic.Vgpu id) updates;
 				remove id
 			)
-
-	let add' x =
-		let open Vgpu in
-		debug "VGPU.add %s %s" (string_of_id x.Vgpu.id) (Jsonrpc.to_string (rpc_of_t x)) ;
-		(* Only if the corresponding VM actually exists *)
-		let vm = vm_of x.id in
-		if not (VM_DB.exists vm) then (
-			debug "VM %s not managed by me" vm ;
-			raise (Does_not_exist ("VM", vm))
-		) ;
-		write x.id x ;
-		x.id
-
-	let remove' id =
-		debug "VGPU.remove %s" (string_of_id id) ;
-		let module B = (val get_backend () : S) in
-		if (B.VGPU.get_state (vm_of id) (read_exn id)).Vgpu.plugged then
-			raise Device_is_connected
-		else
-			remove id
 end
 
 module StringMap = Map.Make(struct type t = string let compare = compare end)
@@ -874,69 +777,6 @@ let export_metadata vdi_map vif_map id =
 		vgpus = vgpus;
 		domains = Some domains;
 	} |> Metadata.rpc_of_t |> Jsonrpc.to_string
-
-let import_metadata id md =
-	let open Vm in
-	let module B = (val get_backend () : S) in
-	let platformdata = md.Metadata.vm.Vm.platformdata in
-	debug "Platformdata:featureset=%s" (try List.assoc "featureset" platformdata with Not_found -> "(absent)");
-	let platformdata =
-		(* If platformdata does not contain a featureset, then we are importing
-		 * a VM that comes from a levelling-v1 host. In this case, give it a featureset
-		 * that contains all features that this host has to offer. *)
-		if not (List.mem_assoc "featureset" platformdata) then
-			let string_of_features features =
-				Array.map (Printf.sprintf "%08Lx") features
-					|> Array.to_list
-					|> String.concat "-"
-			in
-			let fs =
-				let stat = B.HOST.stat () in
-				(match md.Metadata.vm.Vm.ty with
-					| HVM _ -> Host.(stat.cpu_info.features_hvm)
-					| _ -> Host.(stat.cpu_info.features_pv))
-				|> string_of_features
-			in
-			debug "Setting Platformdata:featureset=%s" fs;
-			("featureset", fs) :: platformdata
-		else
-			platformdata
-	in
-	let vm = VM_DB.add' {md.Metadata.vm with platformdata} in
-
-	let vbds = List.map
-		(fun x ->
-			(* If receiving an HVM migration from XS 6.2 or earlier, the hd*
-			   device names need to be upgraded to xvd*. *)
-			let new_device_name =
-				Device_number.upgrade_linux_device (snd x.Vbd.id)
-			in
-			{ x with Vbd.id = (vm, new_device_name) })
-		md.Metadata.vbds
-	in
-	let vifs = List.map (fun x -> { x with Vif.id = (vm, snd x.Vif.id) }) md.Metadata.vifs in
-	let pcis = List.map (fun x -> { x with Pci.id = (vm, snd x.Pci.id) }) md.Metadata.pcis in
-	let vgpus = List.map (fun x -> {x with Vgpu.id = (vm, snd x.Vgpu.id) }) md.Metadata.vgpus in
-
-	(* Remove any VBDs, VIFs, PCIs and VGPUs not passed in - they must have been destroyed in the higher level *)
-
-	let gc old cur remove =
-		let set_difference a b = List.filter (fun x -> not(List.mem x b)) a in
-	    let to_remove = set_difference old cur in
-              List.iter remove to_remove
-          in
-
-	gc (VBD_DB.ids id) (List.map (fun x -> x.Vbd.id) vbds) (VBD_DB.remove');
-	gc (VIF_DB.ids id) (List.map (fun x -> x.Vif.id) vifs) (VIF_DB.remove');
-	gc (PCI_DB.ids id) (List.map (fun x -> x.Pci.id) pcis) (PCI_DB.remove');
-	gc (VGPU_DB.ids id) (List.map (fun x -> x.Vgpu.id) vgpus) (VGPU_DB.remove');
-
-	let (_: Vbd.id list) = List.map VBD_DB.add' vbds in
-	let (_: Vif.id list) = List.map VIF_DB.add' vifs in
-	let (_: Pci.id list) = List.map PCI_DB.add' pcis in
-	let (_: Vgpu.id list) = List.map VGPU_DB.add' vgpus in
-	md.Metadata.domains |> Opt.iter (B.VM.set_internal_state (VM_DB.read_exn vm));
-	vm
 
 (* This is a symptom of the ordering-sensitivity of the SM backend: it is not possible
    to upgrade RO -> RW or downgrade RW -> RO on the fly.
@@ -1916,12 +1756,28 @@ module PCI = struct
 	module DB = PCI_DB
 
 	let string_of_id (a, b) = a ^ "." ^ b
+	let add' x =
+		debug "PCI.add %s %s" (string_of_id x.id) (Jsonrpc.to_string (rpc_of_t x));
+		(* Only if the corresponding VM actually exists *)
+		let vm = DB.vm_of x.id in
+		if not (VM_DB.exists vm) then begin
+			debug "VM %s not managed by me" vm;
+			raise (Does_not_exist ("VM", vm));
+		end;
+		DB.write x.id x;
+		x.id
 	let add _ dbg x =
-		Debug.with_thread_associated dbg (fun () -> DB.add' x) ()
+		Debug.with_thread_associated dbg (fun () -> add' x) ()
 
+	let remove' id =
+		debug "PCI.remove %s" (string_of_id id);
+		let module B = (val get_backend () : S) in
+		if (B.PCI.get_state (DB.vm_of id) (PCI_DB.read_exn id)).Pci.plugged
+		then raise (Device_is_connected)
+		else (DB.remove id)
 	let remove _ dbg id =
 		Debug.with_thread_associated dbg
-			(fun () -> DB.remove' id ) ()
+			(fun () -> remove' id ) ()
 
 	let stat' id =
 		debug "PCI.stat %s" (string_of_id id);
@@ -1946,11 +1802,27 @@ module VGPU = struct
 	module DB = VGPU_DB
 
 	let string_of_id (a, b) = a ^ "." ^ b
+	let add' x =
+		debug "VGPU.add %s %s" (string_of_id x.id) (Jsonrpc.to_string (rpc_of_t x));
+		(* Only if the corresponding VM actually exists *)
+		let vm = DB.vm_of x.id in
+		if not (VM_DB.exists vm) then begin
+			debug "VM %s not managed by me" vm;
+			raise (Does_not_exist ("VM", vm));
+		end;
+		DB.write x.id x;
+		x.id
 	let add _ dbg x =
-		Debug.with_thread_associated dbg (fun () -> DB.add' x) ()
+		Debug.with_thread_associated dbg (fun () -> add' x) ()
 
+	let remove' id =
+		debug "VGPU.remove %s" (string_of_id id);
+		let module B = (val get_backend () : S) in
+		if (B.VGPU.get_state (DB.vm_of id) (VGPU_DB.read_exn id)).Vgpu.plugged
+		then raise (Device_is_connected)
+		else (DB.remove id)
 	let remove _ dbg x =
-		Debug.with_thread_associated dbg (fun () -> DB.remove' x) ()
+		Debug.with_thread_associated dbg (fun () -> remove' x) ()
 
 	let stat' id =
 		debug "VGPU.stat %s" (string_of_id id);
@@ -1975,19 +1847,35 @@ module VBD = struct
 	module DB = VBD_DB
 
 	let string_of_id (a, b) = a ^ "." ^ b
+	let add' x =
+		debug "VBD.add %s %s" (string_of_id x.id) (Jsonrpc.to_string (rpc_of_t x));
+		(* Only if the corresponding VM actually exists *)
+		let vm = DB.vm_of x.id in
+		if not (VM_DB.exists vm) then begin
+			debug "VM %s not managed by me" vm;
+			raise (Does_not_exist("VM", vm));
+		end;
+		DB.write x.id x;
+		x.id
 	let add _ dbg x =
 		Debug.with_thread_associated dbg
-			(fun () -> DB.add' x ) ()
+			(fun () -> add' x ) ()
 
 	let plug _ dbg id = queue_operation dbg (DB.vm_of id) (VBD_hotplug id)
 	let unplug _ dbg id force = queue_operation dbg (DB.vm_of id) (VBD_hotunplug (id, force))
 
 	let insert _ dbg id disk = queue_operation dbg (DB.vm_of id) (Atomic(VBD_insert(id, disk)))
 	let eject _ dbg id = queue_operation dbg (DB.vm_of id) (Atomic(VBD_eject id))
+	let remove' id =
+		debug "VBD.remove %s" (string_of_id id);
+		let module B = (val get_backend () : S) in
+		if (B.VBD.get_state (DB.vm_of id) (VBD_DB.read_exn id)).Vbd.plugged
+		then raise (Device_is_connected)
+		else (DB.remove id)
 
 	let remove _ dbg id =
 		Debug.with_thread_associated dbg
-			(fun () -> DB.remove' id ) ()
+			(fun () -> remove' id ) ()
 
 	let stat' id =
 		debug "VBD.stat %s" (string_of_id id);
@@ -2013,8 +1901,23 @@ module VIF = struct
 	module DB = VIF_DB
 
 	let string_of_id (a, b) = a ^ "." ^ b
+	let add' x =
+		debug "VIF.add %s" (Jsonrpc.to_string (rpc_of_t x));
+		(* Only if the corresponding VM actually exists *)
+		let vm = DB.vm_of x.id in
+		if not (VM_DB.exists vm) then begin
+			debug "VM %s not managed by me" vm;
+			raise (Does_not_exist("VM", vm));
+		end;
+		(* Generate MAC if necessary *)
+		let mac = match x.mac with
+			| "random" -> Mac.random_local_mac ()
+			| "" -> Mac.hashchain_local_mac x.position (DB.vm_of x.id)
+			| mac -> mac in
+		DB.write x.id { x with mac = mac };
+		x.id
 	let add _ dbg x =
-		Debug.with_thread_associated dbg (fun () -> DB.add' x) ()
+		Debug.with_thread_associated dbg (fun () -> add' x) ()
 
 	let plug _ dbg id = queue_operation dbg (DB.vm_of id) (VIF_hotplug id)
 	let unplug _ dbg id force = queue_operation dbg (DB.vm_of id) (VIF_hotunplug (id, force))
@@ -2025,9 +1928,15 @@ module VIF = struct
 	let set_ipv4_configuration _ dbg id ipv4_configuration = queue_operation dbg (DB.vm_of id) (Atomic (VIF_set_ipv4_configuration (id, ipv4_configuration)))
 	let set_ipv6_configuration _ dbg id ipv6_configuration = queue_operation dbg (DB.vm_of id) (Atomic (VIF_set_ipv6_configuration (id, ipv6_configuration)))
 
+	let remove' id =
+		debug "VIF.remove %s" (string_of_id id);
+		let module B = (val get_backend () : S) in
+		if (B.VIF.get_state (DB.vm_of id) (VIF_DB.read_exn id)).Vif.plugged
+		then raise (Device_is_connected)
+		else (DB.remove id)
 	let remove _ dbg id =
 		Debug.with_thread_associated dbg
-			(fun () -> DB.remove' id) ()
+			(fun () -> remove' id) ()
 
 	let stat' id =
 		debug "VIF.stat %s" (string_of_id id);
@@ -2108,8 +2017,14 @@ module VM = struct
 
 	module DB = VM_DB
 
+	let add' x =
+		debug "VM.add %s" (Jsonrpc.to_string (rpc_of_t x));
+		DB.write x.id x;
+		let module B = (val get_backend () : S) in
+		B.VM.add x;
+		x.id
 	let add _ dbg x =
-		Debug.with_thread_associated dbg (fun () -> DB.add' x) ()
+		Debug.with_thread_associated dbg (fun () -> add' x) ()
 
 	let remove _ dbg id =
 		let task = queue_operation_and_wait dbg id (Atomic (VM_remove id)) in
@@ -2248,9 +2163,67 @@ module VM = struct
 				let id = md.Metadata.vm.Vm.id in
 				(* We allow a higher-level toolstack to replace the metadata of a running VM.
 				   Any changes will take place on next reboot. *)
-				if DB.exists id then
-					debug "Overwriting VM metadata for VM: %s" id ;
-				import_metadata id md
+				if DB.exists id
+				then debug "Overwriting VM metadata for VM: %s" id;
+				let platformdata = md.Metadata.vm.Vm.platformdata in
+				debug "Platformdata:featureset=%s" (try List.assoc "featureset" platformdata with Not_found -> "(absent)");
+				let platformdata =
+					(* If platformdata does not contain a featureset, then we are importing
+					 * a VM that comes from a levelling-v1 host. In this case, give it a featureset
+					 * that contains all features that this host has to offer. *)
+					if not (List.mem_assoc "featureset" platformdata) then
+						let string_of_features features =
+							Array.map (Printf.sprintf "%08Lx") features
+								|> Array.to_list
+								|> String.concat "-"
+						in
+						let fs =
+							let stat = B.HOST.stat () in
+							(match md.Metadata.vm.Vm.ty with
+								| HVM _ -> Host.(stat.cpu_info.features_hvm)
+								| _ -> Host.(stat.cpu_info.features_pv))
+							|> string_of_features
+						in
+						debug "Setting Platformdata:featureset=%s" fs;
+						("featureset", fs) :: platformdata
+					else
+						platformdata
+				in
+				let vm = add' {md.Metadata.vm with platformdata} in
+
+				let vbds = List.map
+					(fun x ->
+						(* If receiving an HVM migration from XS 6.2 or earlier, the hd*
+						   device names need to be upgraded to xvd*. *)
+						let new_device_name =
+							Device_number.upgrade_linux_device (snd x.Vbd.id)
+						in
+						{ x with Vbd.id = (vm, new_device_name) })
+					md.Metadata.vbds
+				in
+				let vifs = List.map (fun x -> { x with Vif.id = (vm, snd x.Vif.id) }) md.Metadata.vifs in
+				let pcis = List.map (fun x -> { x with Pci.id = (vm, snd x.Pci.id) }) md.Metadata.pcis in
+				let vgpus = List.map (fun x -> {x with Vgpu.id = (vm, snd x.Vgpu.id) }) md.Metadata.vgpus in
+
+				(* Remove any VBDs, VIFs, PCIs and VGPUs not passed in - they must have been destroyed in the higher level *)
+
+				let gc old cur remove =
+					let set_difference a b = List.filter (fun x -> not(List.mem x b)) a in
+				    let to_remove = set_difference old cur in
+                    List.iter remove to_remove
+                in
+
+				gc (VBD_DB.ids id) (List.map (fun x -> x.Vbd.id) vbds) (VBD.remove');
+				gc (VIF_DB.ids id) (List.map (fun x -> x.Vif.id) vifs) (VIF.remove');
+				gc (PCI_DB.ids id) (List.map (fun x -> x.Pci.id) pcis) (PCI.remove');
+				gc (VGPU_DB.ids id) (List.map (fun x -> x.Vgpu.id) vgpus) (VGPU.remove');
+
+				let (_: Vbd.id list) = List.map VBD.add' vbds in
+				let (_: Vif.id list) = List.map VIF.add' vifs in
+				let (_: Pci.id list) = List.map PCI.add' pcis in
+				let (_: Vgpu.id list) = List.map VGPU.add' vgpus in
+				md.Metadata.domains |> Opt.iter (B.VM.set_internal_state (VM_DB.read_exn vm));
+				vm
 			) ()
 end
 
