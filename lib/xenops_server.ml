@@ -2206,6 +2206,9 @@ module VM = struct
 				md.Metadata.domains |> Opt.iter (B.VM.set_internal_state (VM_DB.read_exn vm));
 				vm
 			) ()
+
+	let import_metadata_async _ dbg s =
+		raise (Unimplemented "VM.import_metadata_async")
 end
 
 module DEBUG = struct
