@@ -100,7 +100,6 @@ type atomic =
 	| VM_save of (Vm.id * flag list * data)
 	| VM_restore of (Vm.id * data)
 	| VM_delay of (Vm.id * float) (** used to suppress fast reboot loops *)
-  | VM_import_metadata of (Vm.id * Metadata.t)
 	| Parallel of Vm.id * string * atomic list
 
 [@@deriving rpc]
@@ -1336,10 +1335,6 @@ let rec perform_atomic ~progress_callback ?subtask ?result (op: atomic) (t: Xeno
 			debug "PCI.plug %s" (PCI_DB.string_of_id id);
 			B.PCI.plug t (PCI_DB.vm_of id) (PCI_DB.read_exn id);
 			PCI_DB.signal id
-		| VM_import_metadata (id, md) ->
-			debug "VM.import_metadata: overwriting VM metadata for VM: %s" id ;
-			let _ = import_metadata id md in
-			()
 		| PCI_unplug id ->
 			debug "PCI.unplug %s" (PCI_DB.string_of_id id);
 			finally
@@ -1603,8 +1598,6 @@ and trigger_cleanup_after_failure_atom op t = match op with
 			immediate_operation t.Xenops_task.dbg id (VM_check_state id)
 		| Parallel (id, description, ops) ->
 			List.iter (fun op->trigger_cleanup_after_failure_atom op t) ops
-		| VM_import_metadata _ ->
-			()
 
 and verify_power_state op =
 	let module B = (val get_backend () : S) in
@@ -2253,15 +2246,11 @@ module VM = struct
 				let module B = (val get_backend () : S) in
 				let md = s |> Jsonrpc.of_string |> Metadata.t_of_rpc in
 				let id = md.Metadata.vm.Vm.id in
-				(* We allow a higher-level toolstack to replace the metadata of a
-					 running VM. Any changes will take place on next reboot.
-					 The metadata update will be queued so that ongoing operations
-					 do not see unexpected state changes. *)
+				(* We allow a higher-level toolstack to replace the metadata of a running VM.
+				   Any changes will take place on next reboot. *)
 				if DB.exists id then
-					let _ = queue_operation_and_wait dbg id (Atomic (VM_import_metadata (id, md))) in
-					id
-				else
-					import_metadata id md
+					debug "Overwriting VM metadata for VM: %s" id ;
+				import_metadata id md
 			) ()
 end
 
