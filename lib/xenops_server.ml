@@ -2263,11 +2263,6 @@ module VM = struct
 				else
 					import_metadata id md
 			) ()
-
-	let import_metadata_async _ dbg s =
-		let md = s |> Jsonrpc.of_string |> Metadata.t_of_rpc in
-		let id = md.Metadata.vm.Vm.id in
-		queue_operation dbg id (Atomic (VM_import_metadata (id, md)))
 end
 
 module DEBUG = struct
