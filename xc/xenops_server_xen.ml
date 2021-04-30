@@ -1681,15 +1681,17 @@ module VM = struct
                let value_opt, subdirs = ls_l ~depth root dir in
                let quota, acc =
                  match value_opt with
-                 | Some v ->
-                     (quota - 1, v :: acc)
+                  | Some ((k, v) as entry) ->
+                      ( quota
+                        - Xenops_utils.xenstore_encoded_entry_size_bytes k v
+                      , entry :: acc )
                  | None ->
                      (quota, acc)
                in
                let depth = depth - 1 in
                List.fold_left (ls_lR ~excludes ~depth root) (quota, acc) subdirs
            in
-           let quota = !Xenopsd.vm_guest_agent_xenstore_quota in
+            let quota = !Xenopsd.vm_guest_agent_xenstore_quota_bytes in
             (* depth is the number of directories descended into,
                keys at depth+1 are still read *)
            let quota, guest_agent =
