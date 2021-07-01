@@ -127,11 +127,11 @@ module VmExtra = struct
     let open Domain in
     match vm.ty with
     | PV _ ->
-        X86 {emulation_flags= []}
+        X86 {emulation_flags= []; misc_flags= []}
     | PVinPVH _ ->
-        X86 {emulation_flags= emulation_flags_pvh}
+        X86 {emulation_flags= emulation_flags_pvh; misc_flags= []}
     | HVM _ ->
-        X86 {emulation_flags= emulation_flags_all}
+        X86 {emulation_flags= emulation_flags_all; misc_flags= []}
 
   (* Known versions of the VM persistent metadata created by xenopsd *)
   let persistent_version_pre_lima = 0
