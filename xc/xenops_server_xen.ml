@@ -829,19 +829,75 @@ let _vdi_id = "vdi-id"
 
 let _dp_id = "dp-id"
 
-(* Compute the migration-safe flags *)
-let upgrade_for_migration ~xc features =
-  try
-    let msr_arch_caps = Xenctrlext.xc_get_msr_arch_caps xc in
-    let tsx_ctrl = 0x80L in
-    if Int64.(logand msr_arch_caps tsx_ctrl = tsx_ctrl) then
-      let cpuid_hle_rtm = (1 lsl 4) lor (1 lsl 11) |> Int64.of_int in
-      features.(5) <- Int64.(logor features.(5) cpuid_hle_rtm)
-    (* These still work, albeit slowly. We might prefer to hide these from
-       host's CPUID for pool leveling and guest boot purposes, but can accept it
-       during migration. *)
-  with Xenctrlext.Unix_error (Unix.ENOSYS, _) ->
-    debug "xc_get_msr_arch_caps: ENOSYS"
+module BitSet = struct
+  type t = int64
+
+  (** [diff lhs rhs] computes all the features that are present in [lhs] but absent in [rhs] *)
+  let diff lhs rhs =
+    (* all bits that are present on lhs and missing on rhs:
+       = lhs & ~rhs *)
+    Int64.(logand lhs (lognot rhs))
+
+  let logor = Int64.logor
+end
+
+module Featureset = struct
+  (* an array of unsigned 32-bit numbers represented using int64 *)
+  type t = int64 array
+
+  (** [zero_pad a b] make arrays same lengths by padding with zeroes on the right *)
+  let zero_pad a b =
+    if Array.length a = Array.length b then
+      (a, b)
+    else
+      let len = max (Array.length a) (Array.length b) in
+      let extend arr =
+        Array.append arr (Array.make (len - Array.length arr) 0L)
+      in
+      (extend a, extend b)
+
+  (** [map2 mapper a b] apply [mapper] elementwise to [a] and [b].
+    The featuresets are padded as needed to make them same length *)
+  let map2 op a b =
+    let a, b = zero_pad a b in
+    Array.map2 op a b
+
+  let diff = map2 BitSet.diff
+
+  let logor a b = map2 BitSet.logor a b
+
+  (** [pp () featureset] is a suitable converter to be used in %a for featureset. *)
+  let pp () fs =
+    (* concat with `:` for easy pasting into `xen-cpuid` to decode *)
+    fs
+    |> Array.map (Printf.sprintf "%08Lx")
+    |> Array.to_list
+    |> String.concat ":"
+end
+
+let debug_featuresets xc name featureset featureset_max index_max =
+  debug "%s Max featureset = %a" name Featureset.pp featureset_max ;
+  debug "%s Dynamic set = %a" name Featureset.pp featureset ;
+
+  (* sanity checks: our featureset shouldn't be more than max! *)
+  let ours_minus_max = Featureset.diff featureset featureset_max in
+  if not @@ Array.for_all (fun x -> Int64.equal x 0L) ours_minus_max then (
+    debug "%s (DynamicSet - Max) = %a" name Featureset.pp ours_minus_max ;
+    warn
+      "Our default policy has CPUID features that are not present in Max \
+       policy! (see above)"
+  ) ;
+  debug "%s (Max - Default) = %a" name Featureset.pp
+    (Featureset.diff featureset_max featureset)
+
+let get_max_featureset xc name featureset index_max =
+  (* The migration-safety policy of max CPUID we can accept *)
+  let featureset_max = Xenctrl.get_cpu_featureset xc index_max in
+
+  debug_featuresets xc name featureset featureset_max index_max ;
+
+  debug "%s MigrationMax = %a" name Featureset.pp featureset_max ;
+  featureset_max
 
 module HOST = struct
   include Xenops_server_skeleton.HOST
@@ -904,32 +960,17 @@ module HOST = struct
           p.nr_cpus / (p.threads_per_core * p.cores_per_socket)
         in
         let features = get_cpu_featureset xc Featureset_host in
-        let features_pv = get_cpu_featureset xc Featureset_pv in
-        let features_hvm = get_cpu_featureset xc Featureset_hvm in
+        (* this is Default policy in Xen's terminology, used on boot for new VMs *)
+        let features_pv_host = get_cpu_featureset xc Featureset_pv in
+        let features_hvm_host = get_cpu_featureset xc Featureset_hvm in
         let features_oldstyle = oldstyle_featuremask xc in
-        (* Compatibility with Xen 4.7 *)
-        (* This is temporary until new CPUID/MSR levelling work is done *)
-        let cpuid_common_1d_features = 0x0183f3ffL in
-        (* Set X86_FEATURE_HTT in 1d *)
-        features_pv.(0) <- Int64.logor features_pv.(0) 0x10000000L ;
-        features_hvm.(0) <- Int64.logor features_hvm.(0) 0x10000000L ;
-        (* Set X86_FEATURE_X2APIC in 1c *)
-        features_pv.(1) <- Int64.logor features_pv.(1) 0x200000L ;
-        features_hvm.(1) <- Int64.logor features_hvm.(1) 0x200000L ;
-        (* Share CPUID_COMMON_1D_FEATURES with e1d *)
-        let tmp = Int64.logand features_pv.(0) cpuid_common_1d_features in
-        features_pv.(2) <- Int64.logor features_pv.(2) tmp ;
-        let tmp = Int64.logand features_hvm.(0) cpuid_common_1d_features in
-        features_hvm.(2) <- Int64.logor features_hvm.(2) tmp ;
-        (* Set X86_FEATURE_CMP_LEGACY in e1c *)
-        features_pv.(3) <- Int64.logor features_pv.(3) 0x2L ;
-        features_hvm.(3) <- Int64.logor features_hvm.(3) 0x2L ;
-        (* Set X86_FEATURE_IBS in e1c for HVM guests *)
-        features_hvm.(3) <- Int64.logor features_hvm.(3) 0x400L ;
-        let features_hvm_host = Array.copy features_hvm in
-        let features_pv_host = Array.copy features_pv in
-        upgrade_for_migration ~xc features_hvm ;
-        upgrade_for_migration ~xc features_pv ;
+        (* this is Max policy in Xen's terminology, used for migration checks *)
+        let features_hvm =
+          get_max_featureset xc "HVM" features_hvm_host Xenctrl.Featureset_hvm_max
+        in
+        let features_pv =
+          get_max_featureset xc "PV" features_pv_host Xenctrl.Featureset_pv_max
+        in
         let v = version xc in
         let xen_version_string =
           Printf.sprintf "%d.%d%s" v.major v.minor v.extra
