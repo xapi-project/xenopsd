@@ -46,7 +46,7 @@ jobs:
         with:
           path: "~/.opam"
           # invalidate cache daily, gets built daily using a scheduled job
-          key: ${{ steps.cache-key.outputs.date }}-0.150
+          key: ${{ steps.cache-key.outputs.date }}-0.150-1
 
       - name: Use ocaml
         uses: avsm/setup-ocaml@v1
