@@ -1,6 +1,9 @@
-name: Build and test (0.150-lcm)
+name: Build and test (0.150-lcm, scheduled)
 
 on:
+  schedule:
+    # run every Monday, this refreshes the cache
+    - cron: '13 2 * * 1'
   push:
   pull_request:
 
@@ -45,7 +48,7 @@ jobs:
         uses: actions/cache@v2
         with:
           path: "~/.opam"
-          # invalidate cache daily, gets built daily using a scheduled job
+          # invalidate cache weekly, gets built using a scheduled job
           key: ${{ steps.cache-key.outputs.date }}-0.150-1
 
       - name: Use ocaml
