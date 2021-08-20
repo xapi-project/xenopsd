@@ -6,6 +6,7 @@
 
  (libraries
    astring
+   core.linux_ext
    xenctrl
    xapi-xenopsd
    xenstore

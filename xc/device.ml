@@ -3290,8 +3290,8 @@ module Backend = struct
 
     (** File-descriptor event monitor implementation for the epoll library *)
     module Monitor = struct
-      module Epoll = Core.Linux_ext.Epoll
-      module Flags = Core.Linux_ext.Epoll.Flags
+      module Epoll = Linux_ext.Epoll
+      module Flags = Linux_ext.Epoll.Flags
 
       let num_file_descrs =
         match Core.Unix.RLimit.((get num_file_descriptors).cur) with
