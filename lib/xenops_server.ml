@@ -701,7 +701,7 @@ module Worker = struct
 								item.Xenops_task.dbg
 								(fun () ->
 									debug "Task %s reference %s: %s" item.Xenops_task.id item.Xenops_task.dbg (string_of_operation op);
-									Xenops_task.run item
+									Xenops_task.run tasks item
 								) ()
 						with e ->
 							debug "Queue caught: %s" (Printexc.to_string e)
@@ -1511,7 +1511,7 @@ let rec immediate_operation dbg id op =
 	Debug.with_thread_associated dbg
 		(fun () ->
 			debug "Task %s reference %s: %s" task.Xenops_task.id task.Xenops_task.dbg (string_of_operation op);
-			Xenops_task.run task
+			Xenops_task.run tasks task
 		) ();
 	match task.Xenops_task.state with
 		| Task.Pending _ -> assert false
@@ -2281,7 +2281,10 @@ module VM = struct
 	let import_metadata_async _ dbg s =
 		let md = s |> Jsonrpc.of_string |> Metadata.t_of_rpc in
 		let id = md.Metadata.vm.Vm.id in
-		queue_operation dbg id (Atomic (VM_import_metadata (id, md)))
+		let task = queue_operation dbg id (Atomic (VM_import_metadata (id, md))) in
+		(* avoid leak *)
+		Xenops_task.destroy_on_finish tasks task;
+		task
 end
 
 module DEBUG = struct
