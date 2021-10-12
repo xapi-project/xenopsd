@@ -37,9 +37,12 @@ let check_domain0_uuid () =
 	with_xs (fun xs ->
 		List.iter (fun (k, v) -> xs.Xs.write k v) kvs
 	);
-	(* before daemonizing we need to forget the xenstore client
-	   because the background thread will be gone after the fork() *)
-	forget_client ()
+	if !Xcp_service.daemon then
+	  (* before daemonizing we need to forget the xenstore client because the
+	     background thread will be gone after the fork().
+	     Note that this leaks a thread.
+	   *)
+	  forget_client ()
 
 let make_var_run_xen () =
 	Stdext.Unixext.mkdir_rec "/var/run/xen" 0o0755
