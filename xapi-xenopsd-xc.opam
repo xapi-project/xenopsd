@@ -36,6 +36,7 @@ depends: [
   "xapi-backtrace"
   "xapi-idl"
   "xapi-rrd"
+  "rrdd-plugin"
   "xapi-stdext-date"
   "xapi-stdext-pervasives"
   "xapi-stdext-std"

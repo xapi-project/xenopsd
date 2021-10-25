@@ -42,8 +42,8 @@ module Compat = struct
   let mtime_clock_count = Mtime_clock.count
   let mtime_span_to_s = Mtime.Span.to_s
   let file_lines_fold = Xapi_stdext_unix.Unixext.file_lines_fold
-  let mutex_execute = Xapi_stdext_Threads.Threadext.Mutex.execute
-  let reporter_async ~shared_page_count ~dssf =
+  let mutex_execute = Xapi_stdext_threads.Threadext.Mutex.execute
+  let reporter_async ~shared_page_count ~dss_f =
           let reporter = Reporter.make () in
           let (th : Thread.t) =
             Thread.create
@@ -52,29 +52,23 @@ module Compat = struct
                   (module D : Debug.DEBUG)
                   ~reporter:(Some reporter) ~uid:"xenopsd-stats"
                   ~neg_shift:0.5 ~page_count:shared_page_count
-                  ~protocol:Rrd_interface.V2 ~dss_f:generate_stats
+                  ~protocol:Rrd_interface.V2 ~dss_f
                 )
               ()
           in
-	  (th, reporter)
+          (th, reporter)
   let reporter_cancel (th, reporter) =
-	Reporter.cancel reporter;
-	Thread.join th
+    Reporter.cancel reporter;
+        Thread.join th
   let reporter_cache : (Thread.t * Reporter.t) option ref = ref None
 
 end
 open Compat
 
 module SlowReporter = struct
-  let ds_to_unknown = function
-    | Rrd.VT_Int64 _ -> Rrd.VT_Int64 (-1L)
-    | Rrd.VT_Float _ | Rrd.VT_Unknown -> Rrd.VT_Float nan
-
-  let to_unknown dss =
-    dss |> List.rev_map (fun ds -> { ds with Ds.ds_value = ds_to_unknown ds.Ds.ds_value } ) |> List.rev
-
   (** [report ~interval_s ~generate_dss] calls [generate_dss] every [interval_s] only,
-      and substitutes VT_Unknown when called more often.
+      and substitutes the previous value when called more often.
+      Using VT_Unknown or NaN would leave gaps in the graph.
       Report_local only supports reporting at 5s intervals, but some metrics are too costly to
       gather that often, e.g. Gc.stat needs to walk the entire heap.
    *)
@@ -197,24 +191,30 @@ module Proc = struct
     let vmdata = "VmData"
     let vmpte = "VmPTE"
     let threads = "Threads"
+    let fdsize = "FDSize"
+    let vmsize = "VmSize"
+    let vmlck = "VmLck"
+    let vmpin = "VmPin"
+    let vmstk = "VmStk"
+    let rss = "Rss"
 
     (* there is also /proc/self/stat and /proc/self/statm, but we'd need to open and parse both *)
     let status = define_fields ~path:"status"
         [ count threads "Total number of threads used by %s"
-        ; count "FDSize" "Total number of file descriptors used by %s"
-        ; kib "VmSize" "Total amount of memory mapped by %s"
-        ; kib "VmLck" "Total amount of memory locked by %s"
-        ; kib "VmPin" "Total amount of memory pinned by %s"
+        ; count fdsize "Total number of file descriptors used by %s"
+        ; kib vmsize "Total amount of memory mapped by %s"
+        ; kib vmlck "Total amount of memory locked by %s"
+        ; kib vmpin "Total amount of memory pinned by %s"
           (* VmRSS is inaccurate accoring to latest proc(5) *)
         ; kib vmdata "Total amount of writable, non-shared and non-stack memory used by %s"
-        ; kib "VmStk" "Total amount of main stack memory used by %s"
+        ; kib vmstk "Total amount of main stack memory used by %s"
         ; kib vmpte "Total amount of page table entry memory used by %s"
         ]
 
     (* According to latest proc(5) these are slower, but provide more accurate information.
        The RSS reported by other stat counters could be off depending on the number of threads. *)
     let smaps_rollup = define_fields ~path:"smaps_rollup" [
-      kib "Rss" "Total amount of resident memory used by %s"
+      kib rss "Total amount of resident memory used by %s"
     ]
   end
 
@@ -230,23 +230,23 @@ module GcStat = struct
   open Gc
 
   let ocaml_total =
-    let f = kib "ocaml_total" "Total OCaml memory used by %s" in
+    let field = kib "ocaml_total" "Total OCaml memory used by %s" in
     fun gc control ->
     gc.heap_words + control.minor_heap_size
-    |> float |> words_to_kib |> f
+    |> float |> words_to_kib |> field
 
   let maybe_words name description v =
     (* quick_stat would return a value of 0, which is not valid *)
     v |> float |> words_to_kib |> kib ~min:0.001 name description
 
-  let compute (gc, control) =
+  let memory_allocation_precise (gc, control) =
     [ ocaml_total gc control
     ; gc.minor_words +. gc.major_words -. gc.promoted_words
       |> words_to_kib
       |> kib_per_s "ocaml_allocation_rate" "Amount of allocations done by OCaml in the given period by %s"
     ]
 
-  let compute_slow (gc, control) =
+  let memory_allocation_approx_expensive (gc, control) =
     [
     (* see https://github.com/ocaml/ocaml/blob/trunk/stdlib/gc.mli#L50-L59, without running a major
        cycle the live_words may overestimate the actual live words, "live" just means "not currently
@@ -289,12 +289,12 @@ let observe_stats l =
   D.debug "stats header: %s" (String.concat "," names);
   D.debug "stats values: %s" (String.concat "," values)
 
-let generate_slow_stats =
+let generate_expensive_stats =
   let generate_dss () =
     let stat = Gc.stat () in
     let gc_control = Gc.get () in
     let rss = Proc.Fields.smaps_rollup () |> Proc.to_list in
-    let gcstat = GcStat.compute_slow (stat, gc_control) in
+    let gcstat = GcStat.memory_allocation_approx_expensive (stat, gc_control) in
     List.rev_append rss gcstat
   in
   SlowReporter.iter_of_fold (SlowReporter.report ~interval_s:150. ~generate_dss)
@@ -304,8 +304,8 @@ let generate_stats () =
   let gc_stat = Gc.quick_stat () in
   let gc_control = Gc.get () in
   let derived = Derived.memextra_kib status (gc_stat, gc_control) in
-  let gcstat = GcStat.compute (gc_stat, gc_control) in
-  let is_slow, slow_stats = generate_slow_stats () in
+  let gcstat = GcStat.memory_allocation_precise (gc_stat, gc_control) in
+  let is_slow, slow_stats = generate_expensive_stats () in
   let stats = derived :: List.concat [
     gcstat;
     Proc.to_list status;
