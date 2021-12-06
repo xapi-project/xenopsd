@@ -83,6 +83,7 @@ type t = {
 	mutable cancel_points_seen: int;               (* incremented every time we pass a cancellation point *)
 	test_cancel_at: int option;                    (* index of the cancel point to trigger *)
 	mutable backtrace: Backtrace.t;                (* on error, a backtrace *)
+	mutable destroy_on_finish: bool;               (* automatically destroy task when it finishes, nobody is waiting on its result *)
 }
 
 type tasks = {
@@ -137,6 +138,7 @@ let add tasks dbg (f: t -> Interface.Task.async_result option) =
 				Some n
 			| _ -> None);
 		backtrace = Backtrace.empty;
+		destroy_on_finish = false;
 	} in
 	Mutex.execute tasks.m
 		(fun () ->
@@ -144,9 +146,23 @@ let add tasks dbg (f: t -> Interface.Task.async_result option) =
 		);
 	t
 
-(* [run t] executes the task body, updating the fields of [t] *)
-let run item =
-	try
+
+(* Remove the task from the id -> task mapping. NB any active thread will still continue. *)
+let destroy tasks id =
+	Mutex.execute tasks.m
+		(fun () ->
+			tasks.tasks := SMap.remove id !(tasks.tasks)
+		)
+
+let task_finished tasks item =
+	if item.destroy_on_finish then begin
+	  debug "Auto-destroying task %s" item.id;
+	  destroy tasks item.id
+	end
+
+(* [run tasks t] executes the task body, updating the fields of [t] *)
+let run tasks item =
+	begin try
 		let start = Unix.gettimeofday () in
 		let result = item.f item in
 		let duration = Unix.gettimeofday () -. start in
@@ -159,6 +175,8 @@ let run item =
 			item.backtrace <- Backtrace.remove e;
 			let e = e |> Interface.exnty_of_exn |> Interface.Exception.rpc_of_exnty in
 			item.state <- Interface.Task.Failed e
+	end;
+	task_finished tasks item
 
 let exists_locked tasks id = SMap.mem id !(tasks.tasks)
 
@@ -189,13 +207,6 @@ let list tasks =
 			SMap.bindings !(tasks.tasks) |> List.map snd
 		)
 
-(* Remove the task from the id -> task mapping. NB any active thread will still continue. *)
-let destroy tasks id =
-	Mutex.execute tasks.m
-		(fun () ->
-			tasks.tasks := SMap.remove id !(tasks.tasks)
-		)
-
 let cancel tasks id =
 	let t = Mutex.execute tasks.m (fun () -> find_locked tasks id) in
 	let callbacks = Mutex.execute t.tm
@@ -210,6 +221,16 @@ let cancel tasks id =
 			with e ->
 				debug "Task.cancel %s: ignore exception %s" id (Printexc.to_string e)
 		) callbacks
+
+let destroy_on_finish tasks id =
+	let t = Mutex.execute tasks.m (fun () -> find_locked tasks id) in
+	let already_finished = Mutex.execute t.tm @@ fun () ->
+		t.destroy_on_finish <- true;
+		match t.state with
+		| Interface.Task.Pending _ -> false
+		| Interface.Task.Completed _ | Interface.Task.Failed _ -> true
+	in
+	if already_finished then task_finished tasks t
 
 let raise_cancelled t =
 	info "Task %s has been cancelled: raising Cancelled exception" t.id;
