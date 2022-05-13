@@ -893,7 +893,6 @@ end
 let debug_featuresets xc name featureset featureset_max index_max =
   debug "%s Max featureset = %a" name Featureset.pp featureset_max ;
   debug "%s Dynamic set = %a" name Featureset.pp featureset ;
-
   (* sanity checks: our featureset shouldn't be more than max! *)
   let ours_minus_max = Featureset.diff featureset featureset_max in
   if not @@ Array.for_all (fun x -> Int64.equal x 0L) ours_minus_max then (
@@ -908,9 +907,7 @@ let debug_featuresets xc name featureset featureset_max index_max =
 let get_max_featureset xc name featureset index_max =
   (* The migration-safety policy of max CPUID we can accept *)
   let featureset_max = Xenctrl.get_cpu_featureset xc index_max in
-
   debug_featuresets xc name featureset featureset_max index_max ;
-
   debug "%s MigrationMax = %a" name Featureset.pp featureset_max ;
   featureset_max
 
@@ -982,7 +979,8 @@ module HOST = struct
         let features_hvm_host = get_cpu_featureset xc Featureset_hvm in
         (* this is Max policy in Xen's terminology, used for migration checks *)
         let features_hvm =
-          get_max_featureset xc "HVM" features_hvm_host Xenctrl.Featureset_hvm_max
+          get_max_featureset xc "HVM" features_hvm_host
+            Xenctrl.Featureset_hvm_max
         in
         let features_pv =
           get_max_featureset xc "PV" features_pv_host Xenctrl.Featureset_pv_max
@@ -2857,8 +2855,7 @@ module VM = struct
                 | Some x ->
                     List.assoc "featureset" x.VmExtra.persistent.platformdata
                 )
-            }
-    )
+            })
 
   let request_rdp vm enabled =
     let uuid = uuid_of_vm vm in
