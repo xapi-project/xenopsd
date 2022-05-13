@@ -2822,7 +2822,15 @@ module VM = struct
                     x.VmExtra.persistent.VmExtra.nested_virt
                 )
             ; domain_type= get_domain_type ~xs di
-            })
+            ; featureset=
+                ( match vme with
+                | None ->
+                    ""
+                | Some x ->
+                    List.assoc "featureset" x.VmExtra.persistent.platformdata
+                )
+            }
+    )
 
   let request_rdp vm enabled =
     let uuid = uuid_of_vm vm in
