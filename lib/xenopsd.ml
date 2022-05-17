@@ -119,9 +119,9 @@ let max_bytes_of_xenstore_entries entries =
       (* maximum size in bytes of a xenstore value *)
     in
     D.debug "entry_overhead = %d" Xenops_utils.entry_overhead ;
-    D.debug "default_path_max = %d" default_path_max;
-    D.debug "longest_encoded_char = %d" Xenops_utils.longest_encoded_char;
-    D.debug "default_maxsize = %d" default_maxsize;
+    D.debug "default_path_max = %d" default_path_max ;
+    D.debug "longest_encoded_char = %d" Xenops_utils.longest_encoded_char ;
+    D.debug "default_maxsize = %d" default_maxsize ;
     D.debug "entries = %d" entries ;
     entries
     * (Xenops_utils.entry_overhead
@@ -404,6 +404,7 @@ let main backend =
        )) ;
   Xenops_server.register_objects () ;
   Xenops_server.set_backend (Some backend) ;
+  Xenops_server.upgrade_internal_state_of_running_vms () ;
   Debug.with_thread_associated "main"
     (fun () ->
       let (_ : Thread.t) =

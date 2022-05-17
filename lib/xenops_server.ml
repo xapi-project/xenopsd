@@ -283,7 +283,8 @@ module PCI_DB = struct
 
   let add' x =
     let open Pci in
-    debug "PCI.add %s %s" (string_of_id x.id) (Jsonrpc.to_string (rpc_of Pci.t x)) ;
+    debug "PCI.add %s %s" (string_of_id x.id)
+      (Jsonrpc.to_string (rpc_of Pci.t x)) ;
     (* Only if the corresponding VM actually exists *)
     let vm = vm_of x.id in
     if not (VM_DB.exists vm) then (
@@ -343,7 +344,8 @@ module VBD_DB = struct
         remove id)
 
   let add' x =
-    debug "VBD.add %s %s" (string_of_id x.Vbd.id) (Jsonrpc.to_string (rpc_of Vbd.t x)) ;
+    debug "VBD.add %s %s" (string_of_id x.Vbd.id)
+      (Jsonrpc.to_string (rpc_of Vbd.t x)) ;
     (* Only if the corresponding VM actually exists *)
     let vm = vm_of x.id in
     if not (VM_DB.exists vm) then (
@@ -479,7 +481,8 @@ module VGPU_DB = struct
         remove id)
 
   let add' x =
-    debug "VGPU.add %s %s" (string_of_id x.Vgpu.id) (Jsonrpc.to_string (rpc_of Vgpu.t x)) ;
+    debug "VGPU.add %s %s" (string_of_id x.Vgpu.id)
+      (Jsonrpc.to_string (rpc_of Vgpu.t x)) ;
     (* Only if the corresponding VM actually exists *)
     let vm = vm_of x.id in
     if not (VM_DB.exists vm) then (
@@ -537,7 +540,8 @@ module VUSB_DB = struct
         remove id)
 
   let add' x =
-    debug "VUSB.add %s %s" (string_of_id x.Vusb.id) (Jsonrpc.to_string (rpc_of Vusb.t x)) ;
+    debug "VUSB.add %s %s" (string_of_id x.Vusb.id)
+      (Jsonrpc.to_string (rpc_of Vusb.t x)) ;
     (* Only if the corresponding VM actually exists *)
     let vm = vm_of x.id in
     if not (VM_DB.exists vm) then (
@@ -1154,9 +1158,7 @@ let import_metadata id md =
   let module B = (val get_backend () : S) in
   let platformdata = md.Metadata.vm.Vm.platformdata in
   debug "Platformdata:featureset=%s"
-    ( try List.assoc "featureset" platformdata
-      with Not_found -> "(absent)"
-    ) ;
+    (try List.assoc "featureset" platformdata with Not_found -> "(absent)") ;
   let platformdata =
     (* If platformdata does not contain a featureset, then we are
        importing a VM that comes from a levelling-v1 host. In this case,
@@ -1196,31 +1198,21 @@ let import_metadata id md =
       md.Metadata.vbds
   in
   let vifs =
-    List.map
-      (fun x -> {x with Vif.id= (vm, snd x.Vif.id)})
-      md.Metadata.vifs
+    List.map (fun x -> {x with Vif.id= (vm, snd x.Vif.id)}) md.Metadata.vifs
   in
   let pcis =
-    List.map
-      (fun x -> {x with Pci.id= (vm, snd x.Pci.id)})
-      md.Metadata.pcis
+    List.map (fun x -> {x with Pci.id= (vm, snd x.Pci.id)}) md.Metadata.pcis
   in
   let vgpus =
-    List.map
-      (fun x -> {x with Vgpu.id= (vm, snd x.Vgpu.id)})
-      md.Metadata.vgpus
+    List.map (fun x -> {x with Vgpu.id= (vm, snd x.Vgpu.id)}) md.Metadata.vgpus
   in
   let vusbs =
-    List.map
-      (fun x -> {x with Vusb.id= (vm, snd x.Vusb.id)})
-      md.Metadata.vusbs
+    List.map (fun x -> {x with Vusb.id= (vm, snd x.Vusb.id)}) md.Metadata.vusbs
   in
   (* Remove any VBDs, VIFs, PCIs and VGPUs not passed in - they must have
      been destroyed in the higher level *)
   let gc old cur remove =
-    let set_difference a b =
-      List.filter (fun x -> not (List.mem x b)) a
-    in
+    let set_difference a b = List.filter (fun x -> not (List.mem x b)) a in
     let to_remove = set_difference old cur in
     List.iter remove to_remove
   in
@@ -2839,7 +2831,8 @@ module VGPU = struct
 
   let add _ dbg x = Debug.with_thread_associated dbg (fun () -> DB.add' x) ()
 
-  let remove _ dbg x = Debug.with_thread_associated dbg (fun () -> DB.remove' x) ()
+  let remove _ dbg x =
+    Debug.with_thread_associated dbg (fun () -> DB.remove' x) ()
 
   let stat' id =
     debug "VGPU.stat %s" (string_of_id id) ;
@@ -3023,14 +3016,6 @@ module HOST = struct
           ) ;
         let module B = (val get_backend () : S) in
         B.HOST.update_guest_agent_features features)
-      ()
-
-  let upgrade_cpu_features _ dbg features is_hvm =
-    Debug.with_thread_associated dbg
-      (fun () ->
-        debug "HOST.upgrade_cpu_features" ;
-        let module B = (val get_backend () : S) in
-        B.HOST.upgrade_cpu_features features is_hvm)
       ()
 end
 
@@ -3285,7 +3270,7 @@ module VM = struct
                (Internal_error
                   (Printf.sprintf "Unable to unmarshal metadata: %s" m)))
     in
-    md.Metadata.vm.Vm.id, md
+    (md.Metadata.vm.Vm.id, md)
 
   let import_metadata _ dbg s =
     Debug.with_thread_associated dbg
@@ -3296,7 +3281,10 @@ module VM = struct
            The metadata update will be queued so that ongoing operations
            do not see unexpected state changes. *)
         if DB.exists id then
-          let _ = queue_operation_and_wait dbg id (Atomic (VM_import_metadata (id, md))) in
+          let _ =
+            queue_operation_and_wait dbg id
+              (Atomic (VM_import_metadata (id, md)))
+          in
           id
         else
           import_metadata id md)
@@ -3450,6 +3438,16 @@ let register_objects () =
       List.iter VUSB_DB.signal (VUSB_DB.ids vm))
     (VM_DB.ids ())
 
+let upgrade_internal_state_of_running_vms () =
+  (* B.VM.set_internal_state contains upgrade code, needed for the case that
+     the type of the backend's internal state is extended in a xenopsd update. *)
+  let module B = (val get_backend () : S) in
+  List.iter
+    (fun vm ->
+      let vm_t = VM_DB.read_exn vm in
+      B.VM.get_internal_state [] [] vm_t |> B.VM.set_internal_state vm_t)
+    (VM_DB.ids ())
+
 type rpc_t = Rpc.t
 
 let typ_of_rpc_t =
@@ -3512,7 +3510,6 @@ let _ =
   Server.HOST.send_debug_keys (HOST.send_debug_keys ()) ;
   Server.HOST.set_worker_pool_size (HOST.set_worker_pool_size ()) ;
   Server.HOST.update_guest_agent_features (HOST.update_guest_agent_features ()) ;
-  Server.HOST.upgrade_cpu_features (HOST.upgrade_cpu_features ()) ;
   Server.VM.add (VM.add ()) ;
   Server.VM.remove (VM.remove ()) ;
   Server.VM.migrate (VM.migrate ()) ;

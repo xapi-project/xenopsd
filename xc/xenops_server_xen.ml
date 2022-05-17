@@ -165,6 +165,7 @@ module VmExtra = struct
     ; pci_power_mgmt: bool [@default false]
     ; pv_drivers_detected: bool [@default false]
     ; xen_platform: (int * int) option (* (device_id, revision) for QEMU *)
+    ; platformdata: (string * string) list [@default []]
   }
   [@@deriving rpcty]
 
@@ -866,19 +867,32 @@ module Featureset = struct
 
   let logor a b = map2 BitSet.logor a b
 
-  (** [pp () featureset] is a suitable converter to be used in %a for featureset. *)
-  let pp () fs =
-    (* concat with `:` for easy pasting into `xen-cpuid` to decode *)
+  exception InvalidFeatureString of string
+
+  let of_string str =
+    let scanf fmt s = Scanf.sscanf s fmt (fun x -> x) in
+    try
+      String.split_on_char '-' str
+      |> (fun lst -> if lst = [""] then [] else lst)
+      |> Array.of_list
+      |> Array.map (scanf "%08Lx%!")
+    with _ -> raise (InvalidFeatureString str)
+
+  let to_string ?(sep = "-") fs =
     fs
     |> Array.map (Printf.sprintf "%08Lx")
     |> Array.to_list
-    |> String.concat ":"
+    |> String.concat sep
+
+  (** [pp () featureset] is a suitable converter to be used in %a for featureset. *)
+  let pp () =
+    (* concat with `:` for easy pasting into `xen-cpuid` to decode *)
+    to_string ~sep:":"
 end
 
 let debug_featuresets xc name featureset featureset_max index_max =
   debug "%s Max featureset = %a" name Featureset.pp featureset_max ;
   debug "%s Dynamic set = %a" name Featureset.pp featureset ;
-
   (* sanity checks: our featureset shouldn't be more than max! *)
   let ours_minus_max = Featureset.diff featureset featureset_max in
   if not @@ Array.for_all (fun x -> Int64.equal x 0L) ours_minus_max then (
@@ -893,16 +907,16 @@ let debug_featuresets xc name featureset featureset_max index_max =
 let get_max_featureset xc name featureset index_max =
   (* The migration-safety policy of max CPUID we can accept *)
   let featureset_max = Xenctrl.get_cpu_featureset xc index_max in
-
   debug_featuresets xc name featureset featureset_max index_max ;
-
   debug "%s MigrationMax = %a" name Featureset.pp featureset_max ;
   featureset_max
 
 module HOST = struct
   include Xenops_server_skeleton.HOST
 
-  let stat () =
+  let stat_cache = ref None
+
+  let stat' () =
     (* The boot-time CPU info is copied into a file in @ETCDIR@/ in the
        xenservices init script; we use that to generate CPU records from. This
        ensures that if xapi is started after someone has modified dom0's VCPUs
@@ -963,10 +977,10 @@ module HOST = struct
         (* this is Default policy in Xen's terminology, used on boot for new VMs *)
         let features_pv_host = get_cpu_featureset xc Featureset_pv in
         let features_hvm_host = get_cpu_featureset xc Featureset_hvm in
-        let features_oldstyle = oldstyle_featuremask xc in
         (* this is Max policy in Xen's terminology, used for migration checks *)
         let features_hvm =
-          get_max_featureset xc "HVM" features_hvm_host Xenctrl.Featureset_hvm_max
+          get_max_featureset xc "HVM" features_hvm_host
+            Xenctrl.Featureset_hvm_max
         in
         let features_pv =
           get_max_featureset xc "PV" features_pv_host Xenctrl.Featureset_pv_max
@@ -993,7 +1007,6 @@ module HOST = struct
             ; features
             ; features_pv
             ; features_hvm
-            ; features_oldstyle
             ; features_hvm_host
             ; features_pv_host
             }
@@ -1001,6 +1014,15 @@ module HOST = struct
             {Host.version= xen_version_string; capabilities= xen_capabilities}
         ; chipset_info= {iommu; hvm}
         })
+
+  let stat () =
+    match !stat_cache with
+    | None ->
+        let s = stat' () in
+        stat_cache := Some s ;
+        s
+    | Some s ->
+        s
 
   let get_console_data () =
     with_xc_and_xs (fun xc xs ->
@@ -1049,10 +1071,6 @@ module HOST = struct
                     write_with_perms (Filename.concat parameters_root key) value)
                   feature.Host.parameters)
               features))
-
-  let upgrade_cpu_features features is_hvm =
-    with_xc_and_xs (fun xc _ ->
-        Xenctrl.upgrade_oldstyle_featuremask xc features is_hvm)
 end
 
 let dB_m = Mutex.create ()
@@ -1255,9 +1273,20 @@ module VM = struct
       @ affinity
       @ weight
     in
+    let set_generation_id platformdata =
+      let key = "generation-id" in
+      match vm.generation_id with
+      | Some genid ->
+          (key, genid) :: List.remove_assoc key platformdata
+      | None ->
+          platformdata
+    in
     let default k v p = if List.mem_assoc k p then p else (k, v) :: p in
     let platformdata =
-      vm.platformdata |> default "acpi_s3" "0" |> default "acpi_s4" "0"
+      persistent.VmExtra.platformdata @ vcpus
+      |> default "acpi_s3" "0"
+      |> default "acpi_s4" "0"
+      |> set_generation_id
     in
     let is_uefi =
       match ty with HVM {firmware= Uefi _; _} -> true | _ -> false
@@ -1277,7 +1306,7 @@ module VM = struct
     ; hap= hvm
     ; name= vm.name
     ; xsdata= vm.xsdata
-    ; platformdata= platformdata @ vcpus
+    ; platformdata
     ; bios_strings= vm.bios_strings
     ; has_vendor_device= vm.has_vendor_device
     ; is_uefi
@@ -1346,6 +1375,7 @@ module VM = struct
                     ; original_profile= profile
                     ; pci_msitranslate= vm.Vm.pci_msitranslate
                     ; pci_power_mgmt= vm.Vm.pci_power_mgmt
+                    ; platformdata= vm.Vm.platformdata
                     }
                 in
                 Some VmExtra.{persistent})
@@ -2818,6 +2848,13 @@ module VM = struct
                     x.VmExtra.persistent.VmExtra.nested_virt
                 )
             ; domain_type= get_domain_type ~xs di
+            ; featureset=
+                ( match vme with
+                | None ->
+                    ""
+                | Some x ->
+                    List.assoc "featureset" x.VmExtra.persistent.platformdata
+                )
             })
 
   let request_rdp vm enabled =
@@ -3003,6 +3040,31 @@ module VM = struct
     let state = DB.read_exn vm.Vm.id in
     state.VmExtra.persistent |> rpc_of VmExtra.persistent_t |> Jsonrpc.to_string
 
+  let upgrade_featureset vm platformdata =
+    let key = "featureset" in
+    match List.assoc_opt key platformdata with
+    | None ->
+        platformdata
+    | Some fs ->
+        (* Ensure that the featureset has the same length as the host's
+           by zero-extending, if needed. *)
+        let host_featureset =
+          let s = HOST.stat () in
+          match vm.ty with
+          | PV _ ->
+              s.Host.cpu_info.features_pv
+          | _ ->
+              s.Host.cpu_info.features_hvm
+        in
+        let fs' =
+          fs
+          |> Featureset.of_string
+          |> Featureset.zero_pad host_featureset
+          |> snd
+          |> Featureset.to_string
+        in
+        (key, fs') :: List.remove_assoc key platformdata
+
   let set_internal_state vm state =
     let k = vm.Vm.id in
     let persistent =
@@ -3048,8 +3110,19 @@ module VM = struct
          present, then make it equal to the profile derived above. *)
       match persistent.VmExtra.original_profile with None -> profile | p -> p
     in
+    let platformdata =
+      (* If platformdata is missing from state, take the one from vm *)
+      ( match persistent.VmExtra.platformdata with
+      | [] ->
+          vm.platformdata
+      | p ->
+          p
+      )
+      |> upgrade_featureset vm
+    in
     let persistent =
-      VmExtra.{persistent with profile; original_profile} |> DB.revision_of k
+      VmExtra.{persistent with profile; original_profile; platformdata}
+      |> DB.revision_of k
       (* This may update the profile, but not the original_profile *)
     in
     persistent |> rpc_of VmExtra.persistent_t |> Jsonrpc.to_string
@@ -4478,10 +4551,15 @@ module Actions = struct
         (Option.map (function {VmExtra.persistent} as extra ->
              ( match persistent with
              | {VmExtra.ty= Some (Vm.HVM hvm_info)} ->
+                 let platformdata =
+                   ("timeoffset", timeoffset)
+                   :: List.remove_assoc "timeoffset" persistent.platformdata
+                 in
                  let persistent =
                    {
                      persistent with
                      VmExtra.ty= Some (Vm.HVM {hvm_info with Vm.timeoffset})
+                   ; platformdata
                    }
                  in
                  debug "VM = %s; rtc/timeoffset <- %s" vm timeoffset ;
