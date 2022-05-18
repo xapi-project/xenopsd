@@ -8,6 +8,7 @@
 
 (alias
  (name runtest)
+ (package xapi-xenopsd)
  (deps test.exe)
  (action
   (run %{deps} --show-errors)
