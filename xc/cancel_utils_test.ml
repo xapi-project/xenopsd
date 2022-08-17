@@ -28,7 +28,8 @@ let xenstore_test xs _ =
     Thread.create
       (fun () ->
         Thread.delay 1. ;
-        Xenops_task.cancel tasks task.Xenops_task.id)
+        Xenops_task.cancel tasks task.Xenops_task.id
+      )
       ()
   in
   try
@@ -45,7 +46,8 @@ let subprocess_test _ =
     Thread.create
       (fun () ->
         Thread.delay 1. ;
-        Xenops_task.cancel tasks task.Xenops_task.id)
+        Xenops_task.cancel tasks task.Xenops_task.id
+      )
       ()
   in
   try
