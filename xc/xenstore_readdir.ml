@@ -57,7 +57,8 @@ let ls ~xs = function
           for i = String.length path to longest + 5 do
             print_string " "
           done ;
-          print_endline (Xsraw.string_of_perms perm))
+          print_endline (Xsraw.string_of_perms perm)
+        )
         paths
   | _ ->
       failwith "ls takes exactly one argument"
@@ -125,9 +126,11 @@ let _ =
       if !mode = "" then
         mode := x
       else
-        paths := x :: !paths)
+        paths := x :: !paths
+    )
     (Printf.sprintf "Manipulate xenstore\nAvailable commands are:\n%s\n"
-       (available_commands ())) ;
+       (available_commands ())
+    ) ;
   let paths = List.rev !paths in
   let mode = !mode in
   let xs = Xs.daemon_open () in

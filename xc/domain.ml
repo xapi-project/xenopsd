@@ -158,8 +158,7 @@ let filtered_xsdata =
   (* disallowed by default; allowed only if it has one of a set of prefixes *)
   let is_allowed path dir = Astring.String.is_prefix ~affix:(dir ^ "/") path in
   let allowed (x, _) =
-    List.fold_left ( || ) false
-      (List.map (is_allowed x) allowed_xsdata_prefixes)
+    List.fold_left ( || ) false (List.map (is_allowed x) allowed_xsdata_prefixes)
   in
   List.filter allowed
 
@@ -346,8 +345,7 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid no_sharept =
         )
     ; max_maptrack_frames=
         ( try
-            int_of_string
-              (List.assoc "max_maptrack_frames" vm_info.platformdata)
+            int_of_string (List.assoc "max_maptrack_frames" vm_info.platformdata)
           with _ -> 1024
         )
     ; arch= domain_config
@@ -407,13 +405,15 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid no_sharept =
         List.iter
           (fun dir ->
             let ent = sprintf "%s/%s" dom_path dir in
-            t.Xst.mkdirperms ent roperm)
+            t.Xst.mkdirperms ent roperm
+          )
           ["cpu"; "memory"] ;
         let mksubdirs base dirs perms =
           List.iter
             (fun dir ->
               let ent = base ^ "/" ^ dir in
-              t.Xst.mkdirperms ent perms)
+              t.Xst.mkdirperms ent perms
+            )
             dirs
         in
         let device_dirs = ["device"; "device/vbd"; "device/vif"] in
@@ -445,7 +445,8 @@ let make ~xc ~xs vm_info vcpus domain_config uuid final_uuid no_sharept =
           )
           rwperm ;
         (* ...and a few corresponding private nodes for us to use. *)
-        mksubdirs xenops_dom_path device_dirs zeroperm) ;
+        mksubdirs xenops_dom_path device_dirs zeroperm
+    ) ;
     xs.Xs.writev dom_path (filtered_xsdata vm_info.xsdata) ;
     xs.Xs.writev (dom_path ^ "/platform") vm_info.platformdata ;
     xs.Xs.writev (dom_path ^ "/bios-strings") vm_info.bios_strings ;
@@ -565,7 +566,8 @@ let shutdown ~xc ~xs domid req =
          again just in case. *)
       ( try t.Xst.rm path with _ -> ()
       ) ;
-      t.Xst.write path reason)
+      t.Xst.write path reason
+  )
 
 (** If domain is enlightened, signal it to shutdown. If the domain fails to
     respond then throw a Watch.Timeout exception. All other exceptions imply the
@@ -647,7 +649,8 @@ let destroy (task : Xenops_task.task_handle) ~xc ~xs ~qemu_domid ~dm domid =
       log_exn_continue
         ("Reset PCI device " ^ string_of_address pcidev)
         (fun () -> Device.PCI.reset ~xs pcidev)
-        ())
+        ()
+    )
     all_pci_devices ;
   (* PCI specification document says that the Function must complete the FLR
      within 100 ms
@@ -661,8 +664,10 @@ let destroy (task : Xenops_task.task_handle) ~xc ~xs ~qemu_domid ~dm domid =
         ("Deassign PCI device " ^ string_of_address pcidev)
         (fun () ->
           Xenctrl.domain_deassign_device xc domid
-            (pcidev.domain, pcidev.bus, pcidev.dev, pcidev.fn))
-        ())
+            (pcidev.domain, pcidev.bus, pcidev.dev, pcidev.fn)
+        )
+        ()
+    )
     all_pci_devices ;
   (* Now we should kill the domain itself *)
   debug "VM = %s; domid = %d; Domain.destroy calling Xenctrl.domain_destroy"
@@ -685,7 +690,8 @@ let destroy (task : Xenops_task.task_handle) ~xc ~xs ~qemu_domid ~dm domid =
           "VM = %s; domid = %d; Caught exception %s while destroying device %s"
           (Uuid.to_string uuid) domid (Printexc.to_string e)
           (string_of_device device)
-      (* Keep going on a best-effort basis *))
+      (* Keep going on a best-effort basis *)
+    )
     all_devices ;
   (* For each device which has a hotplug entry, perform the cleanup. Even if one
      fails, try to cleanup the rest anyway.*)
@@ -696,8 +702,10 @@ let destroy (task : Xenops_task.task_handle) ~xc ~xs ~qemu_domid ~dm domid =
         ("waiting for hotplug for " ^ string_of_device x)
         (fun () ->
           Hotplug.release task ~xc ~xs x ;
-          released := x :: !released)
-        ())
+          released := x :: !released
+        )
+        ()
+    )
     all_devices ;
   (* If we fail to release a device we leak resources. If we are to tolerate
      this then we need an async cleanup thread. *)
@@ -707,13 +715,13 @@ let destroy (task : Xenops_task.task_handle) ~xc ~xs ~qemu_domid ~dm domid =
   List.iter
     (fun dev ->
       error "VM = %s; domid = %d; Domain.destroy failed to release device: %s"
-        (Uuid.to_string uuid) domid (string_of_device dev))
+        (Uuid.to_string uuid) domid (string_of_device dev)
+    )
     failed_devices ;
   (* Remove our reference to the /vm/<uuid> directory *)
   let vm_path = try Some (xs.Xs.read (dom_path ^ "/vm")) with _ -> None in
   Option.iter
-    (fun vm_path ->
-      log_exn_rm ~xs (vm_path ^ "/domains/" ^ string_of_int domid))
+    (fun vm_path -> log_exn_rm ~xs (vm_path ^ "/domains/" ^ string_of_int domid))
     vm_path ;
   (* Delete /local/domain/<domid>, /xenops/domain/<domid>, /libxl/<domid> and
      all the backend device paths *)
@@ -729,8 +737,10 @@ let destroy (task : Xenops_task.task_handle) ~xc ~xs ~qemu_domid ~dm domid =
       let all_backend_types = try xs.Xs.directory backend_path with _ -> [] in
       List.iter
         (fun ty ->
-          log_exn_rm ~xs (Printf.sprintf "%s/%s/%d" backend_path ty domid))
-        all_backend_types)
+          log_exn_rm ~xs (Printf.sprintf "%s/%s/%d" backend_path ty domid)
+        )
+        all_backend_types
+    )
     ["/backend"; "/xenserver/backend"] ;
   (* If all devices were properly un-hotplugged, then zap the private tree in
      xenstore. If there was some error leave the tree for debugging / async
@@ -779,7 +789,8 @@ let numa_hierarchy =
       let cpu_to_node =
         Xenctrlext.(with_xc cputopoinfo) |> Array.map (fun t -> t.node)
       in
-      NUMA.make ~distances ~cpu_to_node)
+      NUMA.make ~distances ~cpu_to_node
+  )
 
 let numa_mutex = Mutex.create ()
 
@@ -794,7 +805,8 @@ let numa_init () =
     Array.iteri
       (fun i m ->
         let open Xenctrlext in
-        D.debug "NUMA node %d: %Ld/%Ld memory free" i m.memfree m.memsize)
+        D.debug "NUMA node %d: %Ld/%Ld memory free" i m.memfree m.memsize
+      )
       mem
   )
 
@@ -822,7 +834,8 @@ let numa_placement domid ~vcpus ~memory =
               Array.map2 NUMAResource.min_memory (Array.of_list nodes) a
         in
         numa_resources := Some nodea ;
-        Softaffinity.plan host nodea vm)
+        Softaffinity.plan host nodea vm
+    )
   in
   match hint with
   | None ->
@@ -832,7 +845,8 @@ let numa_placement domid ~vcpus ~memory =
       Xenops_helpers.with_xc (fun xc ->
           for i = 0 to vcpus - 1 do
             Xenctrlext.vcpu_setaffinity_soft xc domid i cpua
-          done)
+          done
+      )
 
 let build_pre ~xc ~xs ~vcpus ~memory ~has_hard_affinity domid =
   let open Memory in
@@ -841,13 +855,11 @@ let build_pre ~xc ~xs ~vcpus ~memory ~has_hard_affinity domid =
     (Uuid.to_string uuid) domid memory.required_host_free_mib ;
   (* CA-39743: Wait, if necessary, for the Xen scrubber to catch up. *)
   if
-    not
-      (wait_xen_free_mem ~xc (Memory.kib_of_mib memory.required_host_free_mib))
+    not (wait_xen_free_mem ~xc (Memory.kib_of_mib memory.required_host_free_mib))
   then (
     error "VM = %s; domid = %d; Failed waiting for Xen to free %Ld MiB"
       (Uuid.to_string uuid) domid memory.required_host_free_mib ;
-    raise
-      (Not_enough_memory (Memory.bytes_of_mib memory.required_host_free_mib))
+    raise (Not_enough_memory (Memory.bytes_of_mib memory.required_host_free_mib))
   ) ;
   let shadow_mib = Int64.to_int memory.shadow_mib in
   let dom_path = xs.Xs.getdomainpath domid in
@@ -871,17 +883,22 @@ let build_pre ~xc ~xs ~vcpus ~memory ~has_hard_affinity domid =
   maybe
     (fun mode ->
       log_reraise (Printf.sprintf "domain_set_timer_mode %d" mode) (fun () ->
-          Xenctrlext.domain_set_timer_mode xc domid mode))
+          Xenctrlext.domain_set_timer_mode xc domid mode
+      )
+    )
     timer_mode ;
   log_reraise (Printf.sprintf "domain_max_vcpus %d" vcpus) (fun () ->
-      Xenctrl.domain_max_vcpus xc domid vcpus) ;
+      Xenctrl.domain_max_vcpus xc domid vcpus
+  ) ;
   ( if not Xenctrl.((domain_getinfo xc domid).hvm_guest) then
       let kib = Memory.kib_of_mib memory.xen_max_mib in
       log_reraise (Printf.sprintf "domain_set_memmap_limit %Ld KiB" kib)
-        (fun () -> Xenctrl.domain_set_memmap_limit xc domid kib)
+        (fun () -> Xenctrl.domain_set_memmap_limit xc domid kib
+      )
   ) ;
   log_reraise (Printf.sprintf "shadow_allocation_set %d MiB" shadow_mib)
-    (fun () -> Xenctrl.shadow_allocation_set xc domid shadow_mib) ;
+    (fun () -> Xenctrl.shadow_allocation_set xc domid shadow_mib
+  ) ;
   if !Xenopsd.numa_placement then
     log_reraise (Printf.sprintf "NUMA placement") (fun () ->
         if has_hard_affinity then
@@ -894,7 +911,8 @@ let build_pre ~xc ~xs ~vcpus ~memory ~has_hard_affinity domid =
           if !Xenopsd.numa_placement_strict then
             do_numa_placement ()
           else
-            Xenops_utils.best_effort "NUMA placement" do_numa_placement) ;
+            Xenops_utils.best_effort "NUMA placement" do_numa_placement
+    ) ;
   create_channels ~xc uuid domid
 
 let resume_post ~xc ~xs domid =
@@ -934,7 +952,8 @@ let xenguest_args_hvm ~domid ~store_port ~store_domid ~console_port
      | Xenops_interface.Vgpu.{implementation= Nvidia _} :: _ ->
          ["-vgpu"]
      | _ ->
-         [])
+         []
+    )
   @ xenguest_args_base ~domid ~store_port ~store_domid ~console_port
       ~console_domid ~memory
 
@@ -962,7 +981,8 @@ let xenguest_args_pvh ~domid ~store_port ~store_domid ~console_port
   let module_args =
     List.map
       (fun (m, c) ->
-        "-module" :: m :: (match c with Some x -> ["-cmdline"; x] | None -> []))
+        "-module" :: m :: (match c with Some x -> ["-cmdline"; x] | None -> [])
+      )
       modules
     |> List.flatten
   in
@@ -985,7 +1005,8 @@ let xenguest_args_pvh ~domid ~store_port ~store_domid ~console_port
 let xenguest task xenguest_path domid uuid args =
   let line =
     XenguestHelper.(
-      with_connection task xenguest_path domid args [] receive_success)
+      with_connection task xenguest_path domid args [] receive_success
+    )
   in
   match Astring.String.cuts ~sep:" " line with
   | store_mfn :: console_mfn :: _ ->
@@ -1096,7 +1117,8 @@ let build (task : Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid
         , console_mfn
         , console_port
         , [("rtc/timeoffset", timeoffset)]
-        , `hvm )
+        , `hvm
+        )
     | BuildPV pvinfo ->
         let shadow_multiplier = Memory.Linux.shadow_multiplier_default in
         let video_mib = 0 in
@@ -1146,7 +1168,8 @@ let build (task : Xenops_task.task_handle) ~xc ~xs ~store_domid ~console_domid
         , console_mfn
         , console_port
         , [("rtc/timeoffset", timeoffset)]
-        , `pvh )
+        , `pvh
+        )
   in
   let local_stuff = console_keys console_port console_mfn in
   build_post ~xc ~xs ~vcpus ~target_mib ~static_max_mib domid domain_type
@@ -1242,7 +1265,8 @@ let consume_qemu_record fd limit domid uuid =
         error "VM = %s; domid = %d; qemu save file was truncated"
           (Uuid.to_string uuid) domid ;
         raise Domain_restore_truncated_hvmstate
-      ))
+      )
+    )
     (fun () -> Unix.close fd2)
 
 let restore_common (task : Xenops_task.task_handle) ~xc ~xs
@@ -1262,7 +1286,9 @@ let restore_common (task : Xenops_task.task_handle) ~xc ~xs
           with_conversion_script task "Emu_manager" hvm main_fd (fun pipe_r ->
               with_emu_manager_restore task ~domain_type ~dm ~store_port
                 ~console_port ~extras manager_path domid uuid pipe_r vgpu_fd
-                (fun cnx -> restore_libxc_record cnx domid uuid))
+                (fun cnx -> restore_libxc_record cnx domid uuid
+              )
+          )
         with
         | `Ok (s, c) ->
             (s, c)
@@ -1315,10 +1341,11 @@ let restore_common (task : Xenops_task.task_handle) ~xc ~xs
                request to emu-manager. *)
             let wakeup = Event.new_channel () in
             Mutex.execute thread_requests_m (fun () ->
-                thread_requests := (emu, wakeup) :: !thread_requests) ;
+                thread_requests := (emu, wakeup) :: !thread_requests
+            ) ;
             wrap (fun () ->
-                Mutex.execute emu_manager_send_m (fun () ->
-                    send_restore cnx emu))
+                Mutex.execute emu_manager_send_m (fun () -> send_restore cnx emu)
+            )
             >>= fun () ->
             debug "Sent restore:%s to emu-manager. Waiting for result..."
               (string_of_emu emu) ;
@@ -1326,7 +1353,8 @@ let restore_common (task : Xenops_task.task_handle) ~xc ~xs
                received. *)
             Event.receive wakeup |> Event.sync ;
             Mutex.execute thread_requests_m (fun () ->
-                thread_requests := List.remove_assoc emu !thread_requests) ;
+                thread_requests := List.remove_assoc emu !thread_requests
+            ) ;
             return ()
           in
           let rec process_header fd res =
@@ -1411,7 +1439,8 @@ let restore_common (task : Xenops_task.task_handle) ~xc ~xs
                         return (Some (store, console))
                     | _ ->
                         acc
-                  ))
+                  )
+                )
               (return None) results
           in
           let cancel_on_error result =
@@ -1444,8 +1473,10 @@ let restore_common (task : Xenops_task.task_handle) ~xc ~xs
                       wrap_exn (fun () -> process_header fd (return ()))
                       |> cancel_on_error
                       |> Event.send ch
-                      |> Event.sync)
-                    ())
+                      |> Event.sync
+                    )
+                    ()
+                )
                 ()
             in
             (th, ch)
@@ -1457,7 +1488,8 @@ let restore_common (task : Xenops_task.task_handle) ~xc ~xs
             List.map
               (fun (th, ch) _ ->
                 let status = Event.receive ch |> Event.sync in
-                Thread.join th ; status)
+                Thread.join th ; status
+              )
               threads_and_channels
             |> fun statuses ->
             fold (fun x -> x) statuses () >>= fun () ->
@@ -1485,7 +1517,8 @@ let restore_common (task : Xenops_task.task_handle) ~xc ~xs
           | `Ok None ->
               failwith "Well formed, but useless stream"
           | `Error e ->
-              raise e)
+              raise e
+      )
   | `Error e ->
       error "VM = %s; domid = %d; Error reading save signature: %s"
         (Uuid.to_string uuid) domid e ;
@@ -1650,7 +1683,8 @@ let suspend_emu_manager ~(task : Xenops_task.task_handle) ~xc ~xs ~domain_type
               `Error
                 (Emu_manager_failure
                    "Received prepare:vgpu from emu-manager, but there is no \
-                    vGPU fd")
+                    vGPU fd"
+                )
         )
         | Result x ->
             debug "VM = %s; domid = %d; emu-manager completed successfully"
@@ -1661,13 +1695,15 @@ let suspend_emu_manager ~(task : Xenops_task.task_handle) ~xc ~xs ~domain_type
               (Uuid.to_string uuid) domid x ;
             `Error
               (Emu_manager_failure
-                 (Printf.sprintf "Received error from emu-manager: %s" x))
+                 (Printf.sprintf "Received error from emu-manager: %s" x)
+              )
         | _ ->
             error "VM = %s; domid = %d; unexpected message from emu-manager"
               (Uuid.to_string uuid) domid ;
             `Error Emu_manager_protocol_failure
       in
-      wait_for_message ())
+      wait_for_message ()
+  )
 
 let write_qemu_record domid uuid fd =
   let file = sprintf qemu_save_path domid in
@@ -1683,7 +1719,8 @@ let write_qemu_record domid uuid fd =
         (Uuid.to_string uuid) domid size file ;
       if Unixext.copy_file ~limit:size fd2 fd <> size then
         failwith "Failed to write whole qemu-dm state file" ;
-      return ())
+      return ()
+    )
     (fun () -> Unix.unlink file ; Unix.close fd2)
 
 let write_varstored_record task ~xs domid main_fd =
@@ -1798,7 +1835,8 @@ let vcpu_affinity_set ~xc domid vcpu cpumap =
   debug "VM = %s; domid = %d; vcpu_affinity_set %d <- %s" (Uuid.to_string uuid)
     domid vcpu
     (String.concat ""
-       (List.map (fun b -> if b then "1" else "0") (Array.to_list cpumap))) ;
+       (List.map (fun b -> if b then "1" else "0") (Array.to_list cpumap))
+    ) ;
   Xenctrl.vcpu_affinity_set xc domid vcpu cpumap
 
 let vcpu_affinity_get ~xc domid vcpu =
@@ -1876,7 +1914,8 @@ let set_xsdata ~xs domid xsdata =
   let dom_path = Printf.sprintf "/local/domain/%d" domid in
   Xs.transaction xs (fun t ->
       List.iter (fun x -> t.Xst.rm (dom_path ^ "/" ^ x)) allowed_xsdata_prefixes ;
-      t.Xst.writev dom_path (filtered_xsdata xsdata))
+      t.Xst.writev dom_path (filtered_xsdata xsdata)
+  )
 
 type node = {contents: string; subtrees: (string * node) list}
 
@@ -1940,6 +1979,7 @@ let move_xstree ~xs domid olduuid newuuid =
           | name :: path' ->
               fixup false (List.rev path') (name, tree)
           | _ ->
-              failwith "Internal error: mv_tree called on empty path")
+              failwith "Internal error: mv_tree called on empty path"
+    )
   in
   List.iter mv_tree search_paths
