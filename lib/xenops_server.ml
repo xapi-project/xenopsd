@@ -21,6 +21,56 @@ module D = Debug.Make (struct let name = "xenops_server" end)
 
 open D
 
+(* This code is usually in xcp-idl but we introduced a local copy here
+   to support https, which has a dependency on stunnel and would create
+   a circular dependency. *)
+
+let https_port = 443
+
+let with_open_uri' uri f =
+  let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
+  match Uri.scheme uri with
+  | Some "http" -> (
+    match (Uri.host uri, Uri.port uri) with
+    | Some host, Some port ->
+        Open_uri.open_tcp f host port
+    | Some host, None ->
+        Open_uri.open_tcp f host 80
+    | _, _ ->
+        failwith
+          (Printf.sprintf "Failed to parse host and port from URI: %s"
+             (Uri.to_string uri)
+          )
+  )
+  | Some "https" -> (
+    match (Uri.host uri, Uri.port uri) with
+    | Some host, Some port ->
+        Stunnel.with_connect host port (fun s ->
+            f Safe_resources.Unixfd.(!(s.Stunnel.fd))
+        )
+    | Some host, None ->
+        Stunnel.with_connect host https_port (fun s ->
+            f Safe_resources.Unixfd.(!(s.Stunnel.fd))
+        )
+    | _, _ ->
+        failwith
+          (Printf.sprintf "Failed to parse host and port from URI: %s"
+             (Uri.to_string uri)
+          )
+  )
+  | Some "file" ->
+      let filename = Uri.path_and_query uri in
+      let sockaddr = Unix.ADDR_UNIX filename in
+      let s = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      finally
+        (fun () -> Unix.connect s sockaddr ; Open_uri.handle_socket f s)
+        (fun () -> Unix.close s)
+  | Some x ->
+      failwith (Printf.sprintf "Unsupported URI scheme: %s" x)
+  | None ->
+      failwith (Printf.sprintf "Failed to parse URI: %s" (Uri.to_string uri))
+
+
 let rpc_of ty x = Rpcmarshal.marshal ty.Rpc.Types.ty x
 
 let finally = Xapi_stdext_pervasives.Pervasiveext.finally
@@ -2396,7 +2446,7 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
            memory on the receiver *)
         let state = B.VM.get_state vm in
         info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit ;
-        Open_uri.with_open_uri memory_url (fun mem_fd ->
+        with_open_uri' memory_url (fun mem_fd ->
             let module Handshake = Xenops_migrate.Handshake in
             let do_request fd extra_cookies url =
               let https = Uri.scheme url = Some "https" in
@@ -2479,7 +2529,7 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
                   make_url "/migrate-vgpu/"
                     (VGPU_DB.string_of_id (new_dest_id, dev_id))
                 in
-                Open_uri.with_open_uri vgpu_url (fun vgpu_fd ->
+                with_open_uri' vgpu_url (fun vgpu_fd ->
                     do_request vgpu_fd [(cookie_vgpu_migration, "")] vgpu_url ;
                     Handshake.recv_success vgpu_fd ;
                     debug "VM.migrate: Synchronisation point 1-vgpu" ;
