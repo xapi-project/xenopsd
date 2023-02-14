@@ -2399,7 +2399,9 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
         Open_uri.with_open_uri memory_url (fun mem_fd ->
             let module Handshake = Xenops_migrate.Handshake in
             let do_request fd extra_cookies url =
-              Sockopt.set_sock_keepalives fd ;
+              let https = Uri.scheme url = Some "https" in
+              if not https then
+                Sockopt.set_sock_keepalives fd ;
               let module Request =
                 Cohttp.Request.Make (Cohttp_posix_io.Unbuffered_IO) in
               let cookies =
