@@ -33,6 +33,7 @@
    re
    re.pcre
    fmt
+   stunnel
    xapi-stdext-date
    xapi-stdext-pervasives
    xapi-stdext-threads

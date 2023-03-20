@@ -2349,7 +2349,7 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
         let module Remote =
         Xenops_interface.XenopsAPI (Idl.Exn.GenClient (struct
           let rpc =
-            Xcp_client.xml_http_rpc ~srcstr:"xenops" ~dststr:"dst_xenops"
+            Xcp_client_https.xml_http_rpc ~srcstr:"xenops" ~dststr:"dst_xenops"
               (fun () -> vmm.vmm_url
             )
         end)) in
@@ -2396,10 +2396,12 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
            memory on the receiver *)
         let state = B.VM.get_state vm in
         info "VM %s has memory_limit = %Ld" id state.Vm.memory_limit ;
-        Open_uri.with_open_uri memory_url (fun mem_fd ->
+        Open_uri_https.with_open_uri memory_url (fun mem_fd ->
             let module Handshake = Xenops_migrate.Handshake in
             let do_request fd extra_cookies url =
-              Sockopt.set_sock_keepalives fd ;
+              let https = Uri.scheme url = Some "https" in
+              if not https then
+                Sockopt.set_sock_keepalives fd ;
               let module Request =
                 Cohttp.Request.Make (Cohttp_posix_io.Unbuffered_IO) in
               let cookies =
@@ -2477,7 +2479,7 @@ and perform_exn ?subtask ?result (op : operation) (t : Xenops_task.task_handle)
                   make_url "/migrate-vgpu/"
                     (VGPU_DB.string_of_id (new_dest_id, dev_id))
                 in
-                Open_uri.with_open_uri vgpu_url (fun vgpu_fd ->
+                Open_uri_https.with_open_uri vgpu_url (fun vgpu_fd ->
                     do_request vgpu_fd [(cookie_vgpu_migration, "")] vgpu_url ;
                     Handshake.recv_success vgpu_fd ;
                     debug "VM.migrate: Synchronisation point 1-vgpu" ;
