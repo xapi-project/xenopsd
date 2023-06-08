@@ -21,15 +21,16 @@ let with_open_uri uri f =
           )
   )
   | Some "https" -> (
+    let process (s : Stunnel.t) =
+      finally
+        (fun () -> f Safe_resources.Unixfd.(!(s.Stunnel.fd)))
+        (fun () -> Stunnel.disconnect s)
+    in
     match (Uri.host uri, Uri.port uri) with
     | Some host, Some port ->
-        Stunnel.with_connect host port (fun s ->
-            f Safe_resources.Unixfd.(!(s.Stunnel.fd))
-        )
+        Stunnel.with_connect host port process
     | Some host, None ->
-        Stunnel.with_connect host https_port (fun s ->
-            f Safe_resources.Unixfd.(!(s.Stunnel.fd))
-        )
+        Stunnel.with_connect host https_port process
     | _, _ ->
         failwith
           (Printf.sprintf "Failed to parse host and port from URI: %s"
