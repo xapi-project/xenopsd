@@ -1,6 +1,6 @@
 (executable
  (name test)
- (libraries alcotest xenopsd)
+ (libraries alcotest cpuid xapi-test-utils xenopsd)
  (preprocess
   (pps ppx_deriving_rpc ppx_sexp_conv)
  )
