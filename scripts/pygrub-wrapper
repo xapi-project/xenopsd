@@ -1,0 +1,49 @@
+#! /usr/bin/python
+#
+# Copyright (C) 2023 Cloud Software Group
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published
+# by the Free Software Foundation; version 2.1 only. with the special
+# exception on linking described in file LICENSE.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+
+from __future__ import print_function
+import pwd, subprocess, sys
+import grp, os, stat
+
+cmd = ["pygrub"]
+
+# Get the usage string. We can't use check_output() because the exit status isn't 0
+pygrub_usage = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()[1]
+
+with_depriv = False
+for arg in sys.argv[1:]:
+    # Catch the synthetic --domid argument and turn it into --runas
+    argname_domid = "--domid="
+    if arg.startswith(argname_domid):
+        if "[--runas=]" not in pygrub_usage:
+            # Skip depriv if pygrub doesn't support it
+            continue
+        with_depriv = True
+        domid = int(arg[len(argname_domid):])
+        uid = pwd.getpwnam('qemu_base').pw_uid + domid
+        cmd += ["--runas=" + str(uid)]
+
+        # Set group permissions on the disk so a depriv pygrub can read it
+        disk = sys.argv[-1]
+        gid = grp.getgrnam('disk').gr_gid
+        disk_stat = os.stat(disk)
+        os.chown(disk, uid, gid)
+        os.chmod(disk, disk_stat.st_mode | stat.S_IRGRP)
+    else:
+        cmd += [arg]
+
+if 'PYGRUB_FORCE_DEPRIV' in os.environ.keys() and not with_depriv:
+    raise RuntimeError("Trying to run pygrub as root: %s" % pygrub_usage)
+
+sys.exit(subprocess.call(cmd))
