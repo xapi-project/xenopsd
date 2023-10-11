@@ -44,6 +44,7 @@ install:
 	install -D ./scripts/common.py $(DESTDIR)/$(LIBEXECDIR)/common.py
 	install -D ./scripts/igmp_query_injector.py $(DESTDIR)/$(LIBEXECDIR)/igmp_query_injector.py
 	install -D ./scripts/qemu-wrapper $(DESTDIR)/$(QEMU_WRAPPER_DIR)/qemu-wrapper
+	install -D ./scripts/pygrub-wrapper $(DESTDIR)/$(QEMU_WRAPPER_DIR)/pygrub-wrapper
 	DESTDIR=$(DESTDIR) SBINDIR=$(SBINDIR) QEMU_WRAPPER_DIR=$(QEMU_WRAPPER_DIR) LIBEXECDIR=$(LIBEXECDIR) ETCDIR=$(ETCDIR) ./scripts/make-custom-xenopsd.conf
 
 uninstall:
@@ -70,5 +71,6 @@ uninstall:
 	rm -f $(DESTDIR)/$(LIBEXECDIR)/common.py*
 	rm -f $(DESTDIR)/$(LIBEXECDIR)/igmp_query_injector.py*
 	rm -f $(DESTDIR)/$(QEMU_WRAPPER_DIR)/qemu-wrapper
+	rm -f $(DESTDIR)/$(QEMU_WRAPPER_DIR)/pygrub-wrapper
 
 .DEFAULT_GOAL := release
