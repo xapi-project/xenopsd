@@ -1,4 +1,3 @@
-
 (* This code is usually in xcp-idl but we introduced a local copy here
    to support https, which has a dependency on stunnel and would create
    a circular dependency. *)
@@ -21,22 +20,22 @@ let with_open_uri uri f =
           )
   )
   | Some "https" -> (
-    let process (s : Stunnel.t) =
-      finally
-        (fun () -> f Safe_resources.Unixfd.(!(s.Stunnel.fd)))
-        (fun () -> Stunnel.disconnect s)
-    in
-    match (Uri.host uri, Uri.port uri) with
-    | Some host, Some port ->
-        Stunnel.with_connect host port process
-    | Some host, None ->
-        Stunnel.with_connect host https_port process
-    | _, _ ->
-        failwith
-          (Printf.sprintf "Failed to parse host and port from URI: %s"
-             (Uri.to_string uri)
-          )
-  )
+      let process (s : Stunnel.t) =
+        finally
+          (fun () -> f Safe_resources.Unixfd.(!(s.Stunnel.fd)))
+          (fun () -> Stunnel.disconnect s)
+      in
+      match (Uri.host uri, Uri.port uri) with
+      | Some host, Some port ->
+          Stunnel.with_connect host port process
+      | Some host, None ->
+          Stunnel.with_connect host https_port process
+      | _, _ ->
+          failwith
+            (Printf.sprintf "Failed to parse host and port from URI: %s"
+               (Uri.to_string uri)
+            )
+    )
   | Some "file" ->
       let filename = Uri.path_and_query uri in
       let sockaddr = Unix.ADDR_UNIX filename in
@@ -48,5 +47,3 @@ let with_open_uri uri f =
       failwith (Printf.sprintf "Unsupported URI scheme: %s" x)
   | None ->
       failwith (Printf.sprintf "Failed to parse URI: %s" (Uri.to_string uri))
-
-
