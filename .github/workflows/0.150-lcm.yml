@@ -27,6 +27,9 @@ jobs:
       package: "xapi-xenopsd xapi-xenopsd-simulator xapi-xenopsd-cli xapi-xenopsd-xc"
 
     steps:
+      - name: Update apt cache
+        run: sudo apt-get update
+
       - name: Checkout code
         uses: actions/checkout@v2
         with:
