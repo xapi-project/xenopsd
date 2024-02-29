@@ -1077,6 +1077,16 @@ module type DAEMONPIDPATH = sig
   val use_pidfile : bool
 
   val pid_path : int -> string
+
+  (* To check if a pid is valid, look up its process name, and some commandline
+     arg containing domid if domid is not part of its process name, check that
+     they are contained in /proc/<pid>/cmdline.
+     The expected cmdline items are set by (expected_cmdline_items domid) for
+     each service. Note that the parameter "domid" here is required as
+     otherwise we can not distinguish between the process instances of the same
+     service for different domains. *)
+  val expected_cmdline_items : domid:int -> string list
+
 end
 
 module DaemonMgmt (D : DAEMONPIDPATH) = struct
@@ -1108,29 +1118,59 @@ module DaemonMgmt (D : DAEMONPIDPATH) = struct
     else
       None
 
-  let pid ~xs domid =
+  (* For process id, look up its process name, and some commandline arg
+     containing domid if domid is not part of its process name, check that
+     they are contained in /proc/<pid>/cmdline. *)
+  let is_cmdline_valid ~pid expected_args =
     try
-      match pidfile_path domid with
-      | Some path when Sys.file_exists path ->
-          let pid =
-            path |> Unixext.string_of_file |> String.trim |> int_of_string
-          in
-          Unixext.with_file path [Unix.O_RDONLY] 0 (fun fd ->
-              try
-                Unix.lockf fd Unix.F_TRLOCK 0 ;
-                (* we succeeded taking the lock: original process is dead.
-                 * some other process might've reused its pid *)
-                None
-              with Unix.Unix_error (Unix.EAGAIN, _, _) ->
-                (* cannot obtain lock: process is alive *)
-                Some pid
-          )
+      let cmdline_str =
+        Printf.sprintf "/proc/%d/cmdline" pid |> Unixext.string_of_file
+      in
+      match cmdline_str with
+      | "" ->
+          (* from man proc:
+             /proc/[pid]/cmdline
+             This read-only file holds the complete command line for the process,
+             unless the process is a zombie. In the latter case, there is nothing
+             in this file: that is, a read on this file will return 0 characters.
+             This applies when the VM is being shut down. *)
+          false
       | _ ->
-          (* backward compatibility during update installation: only has
-             xenstore pid *)
-          let pid = xs.Xs.read (pid_path domid) in
-          Some (int_of_string pid)
-    with _ -> None
+          let cmdline = Astring.String.cuts ~sep:"\000" cmdline_str in
+          let valid =
+            List.for_all (fun arg -> List.mem arg cmdline) expected_args
+          in
+          if not valid then error "%s: pid not valid (pid = %d)" D.name pid;
+          valid
+    with _ -> false
+
+  let pid ~xs domid =
+    let ( let* ) = Option.bind in
+    let* pid =
+      try
+        match pidfile_path domid with
+        | Some path when Sys.file_exists path ->
+            let pid =
+              path |> Unixext.string_of_file |> String.trim |> int_of_string
+            in
+            Unixext.with_file path [ Unix.O_RDONLY ] 0 (fun fd ->
+                try
+                  Unix.lockf fd Unix.F_TRLOCK 0;
+                  (* we succeeded taking the lock: original process is dead.
+                   * some other process might've reused its pid *)
+                  None
+                with Unix.Unix_error (Unix.EAGAIN, _, _) ->
+                  (* cannot obtain lock: process is alive *)
+                  Some pid)
+        | _ ->
+            (* backward compatibility during update installation: only has
+               xenstore pid *)
+            let pid = xs.Xs.read (pid_path domid) in
+            Some (int_of_string pid)
+      with _ -> None
+    in
+    if is_cmdline_valid ~pid (D.expected_cmdline_items ~domid) then Some pid
+    else None
 
   let is_running ~xs domid =
     match pid ~xs domid with
@@ -1254,6 +1294,9 @@ module Qemu = DaemonMgmt (struct
   let use_pidfile = true
 
   let pid_path domid = sprintf "/local/domain/%d/qemu-pid" domid
+
+  let expected_cmdline_items ~domid = [Printf.sprintf "qemu-dm-%d" domid]
+
 end)
 
 module Vgpu = DaemonMgmt (struct
@@ -1262,6 +1305,10 @@ module Vgpu = DaemonMgmt (struct
   let use_pidfile = false
 
   let pid_path domid = sprintf "/local/domain/%d/vgpu-pid" domid
+
+  let domain_arg domid = Printf.sprintf "--domain=%d" domid
+
+  let expected_cmdline_items ~domid = [!Xc_resources.vgpu; domain_arg domid]
 end)
 
 module Varstored = SystemdDaemonMgmt (struct
@@ -1270,18 +1317,29 @@ module Varstored = SystemdDaemonMgmt (struct
   let use_pidfile = true
 
   let pid_path domid = sprintf "/local/domain/%d/varstored-pid" domid
+
+  let expected_cmdline_items ~domid =
+      [!Xc_resources.varstored; pid_path domid]
 end)
 
 module PV_Vnc = struct
+
+  let vnc_console_path domid = sprintf "/local/domain/%d/console" domid
+
   module D = DaemonMgmt (struct
     let name = "vncterm"
 
     let use_pidfile = false
 
     let pid_path domid = sprintf "/local/domain/%d/vncterm-pid" domid
+
+    let expected_cmdline_items ~domid =
+      [
+        !Xc_resources.vncterm (* vncterm binary path *)
+      ; vnc_console_path domid (* xenstore console path *)
+      ]
   end)
 
-  let vnc_console_path domid = sprintf "/local/domain/%d/console" domid
 
   let pid ~xs domid = D.pid ~xs domid
 
@@ -1307,7 +1365,7 @@ module PV_Vnc = struct
         D.is_running ~xs domid && is_cmdline_valid domid p
 
   let get_vnc_port ~xs domid =
-    if not (is_vncterm_running ~xs domid) then
+    if not (D.is_running ~xs domid) then
       None
     else
       try
@@ -1317,7 +1375,7 @@ module PV_Vnc = struct
       with _ -> None
 
   let get_tc_port ~xs domid =
-    if not (is_vncterm_running ~xs domid) then
+    if not (D.is_running ~xs domid) then
       None
     else
       try Some (int_of_string (xs.Xs.read (Generic.tc_port_path domid)))
@@ -1376,7 +1434,7 @@ module PV_Vnc = struct
     let l =
       [
         "-x"
-      ; sprintf "/local/domain/%d/console" domid
+      ; vnc_console_path domid
       ; "-T"
       ; (* listen for raw connections *)
         "-v"
